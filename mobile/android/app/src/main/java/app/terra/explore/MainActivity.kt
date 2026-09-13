@@ -240,10 +240,10 @@ class MainActivity: Activity(), LocationListener {
     private fun profile() {
         val p=page("Твой профиль"); val data=personal()
         val avatar=ImageView(this); val avatarPath=data.optString("avatar"); if(avatarPath.isNotBlank()) avatar.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,avatarPath).path)) else avatar.setImageDrawable(navIcon("Фото","profile") {}.drawable)
-        avatar.scaleType=ImageView.ScaleType.CENTER_CROP; avatar.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); avatar.clipToOutline=true; avatar.contentDescription="Фото профиля"; p.addView(avatar,LinearLayout.LayoutParams(dp(88),dp(88)))
-        p.addView(text(data.optString("name","Исследователь"),28))
+        avatar.scaleType=ImageView.ScaleType.CENTER_CROP; avatar.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); avatar.clipToOutline=true; avatar.contentDescription="Фото профиля"; val identity=LinearLayout(this); identity.gravity=Gravity.CENTER_VERTICAL; identity.addView(avatar,LinearLayout.LayoutParams(dp(72),dp(72))); p.addView(identity)
+        identity.addView(text(data.optString("name","Исследователь"),26),LinearLayout.LayoutParams(0,-2,1f).also { it.leftMargin=dp(18) })
         val sessions=store.sessions.toList(); p.addView(text("%.2f км".format(sessions.sumOf { it.distance() }/1000),36))
-        p.addView(text("${sessions.size} маршрутов · ${sessions.count { it.startedAt>=System.currentTimeMillis()-7*86400000L }} за 7 дней\n${sessions.sumOf { it.duration() }/60} минут в движении",16))
+        p.addView(text("%d маршрутов · %d минут".format(sessions.size,sessions.sumOf { it.duration() }/60),16))
         val streak=WalkingStreak.status(WalkingStreak.days(sessions),restores())
         val rhythm=LinearLayout(this); rhythm.gravity=Gravity.CENTER_VERTICAL; rhythm.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); rhythm.setPadding(dp(16),dp(16),dp(16),dp(16)); rhythm.addView(navIcon("Ритм прогулок","rhythm") {},LinearLayout.LayoutParams(dp(72),dp(80))); rhythm.addView(text("РИТМ\n${streak.count} дней подряд",24)); p.addView(rhythm)
         val weekRow=LinearLayout(this); val walked=WalkingStreak.days(sessions); val restored=restores().map { it.day }.toSet()
@@ -387,6 +387,8 @@ class MainActivity: Activity(), LocationListener {
     private fun markPlace(coordinate: LatLng,existing: org.json.JSONObject?=null) {
         val p=page(if(existing==null) "Новое место" else "Редактировать место"); p.addView(text("Что хочется запомнить здесь?",18)); val note=EditText(this); note.setTextColor(if(dark) Color.WHITE else Color.BLACK); note.minLines=3; note.hint="Заметка"; note.setText(existing?.optString("note") ?: ""); p.addView(note)
         selectedPhoto=existing?.optString("photo")?.takeIf { it.isNotBlank() }; val preview=ImageView(this); preview.adjustViewBounds=true; preview.visibility=View.GONE; p.addView(preview,LinearLayout.LayoutParams(-1,dp(180))); photoPreview=preview
+        selectedPhoto?.let { preview.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,it).path)); preview.visibility=View.VISIBLE }
+        row(p,"Убрать фото") { selectedPhoto=null; preview.setImageDrawable(null); preview.visibility=View.GONE }
         row(p,"Добавить фото") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),40) }
         row(p,"Сохранить место") { try {
             val data=personal(); val places=savedPlaces(); val place=org.json.JSONObject().put("id",existing?.getString("id") ?: java.util.UUID.randomUUID().toString()).put("lat",coordinate.latitude).put("lng",coordinate.longitude).put("note",note.text.toString().take(2000)).put("photo",selectedPhoto)

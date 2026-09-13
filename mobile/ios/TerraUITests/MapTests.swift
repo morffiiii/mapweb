@@ -42,7 +42,7 @@ final class MapTests: XCTestCase {
         capture(app, "02-history")
         app.buttons.matching(NSPredicate(format: "label CONTAINS 'км'")).firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "historyRouteMap").firstMatch.waitForExistence(timeout: 10))
-        capture(app,"02-route-map"); app.buttons["Закрыть"].firstMatch.tap()
+        capture(app,"02-route-map"); app.buttons.matching(identifier: "Закрыть").firstMatch.tap()
         app.buttons["Закрыть"].tap()
         app.buttons["Профиль"].tap(); capture(app,"03-profile")
         app.buttons["Закрыть"].tap()
@@ -53,6 +53,20 @@ final class MapTests: XCTestCase {
         app.buttons["startRecording"].tap()
         XCTAssertTrue(app.buttons["Завершить"].waitForExistence(timeout: 5))
         app.buttons["Завершить"].tap()
+        app.buttons.matching(identifier: "Закрыть").firstMatch.tap()
+        app.buttons["Профиль"].tap()
+        tap(app.buttons["Личные данные"],in: app)
+        let interest = app.buttons["Больше гулять"]
+        tap(interest,in: app)
+        XCTAssertEqual(interest.value as? String,"Выбрано")
+        XCTAssertFalse(app.staticTexts["Как узнал о Terra"].exists)
+        capture(app,"06-edit-interests")
+        app.buttons.matching(identifier: "Закрыть").firstMatch.tap()
+        tap(app.buttons["Выйти"],in: app)
+        XCTAssertTrue(app.buttons["Войти"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Продолжить без регистрации"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["Войти"].waitForExistence(timeout: 10))
     }
     private func capture(_ app: XCUIApplication, _ name: String) { let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot) }
     private func tap(_ element: XCUIElement,in app: XCUIApplication) { XCTAssertTrue(element.waitForExistence(timeout: 10)); for _ in 0..<8 { if element.isHittable { break }; app.scrollViews.firstMatch.swipeUp() }; element.tap() }

@@ -11,5 +11,5 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
     func applicationDidEnterBackground(_ application: UIApplication) { TrackingEngine.shared.foreground(false) }
-    func applicationWillEnterForeground(_ application: UIApplication) { TrackingEngine.shared.foreground(true) }
+    func applicationWillEnterForeground(_ application: UIApplication) { TrackingEngine.shared.foreground(window?.rootViewController is MapController) }
 }
