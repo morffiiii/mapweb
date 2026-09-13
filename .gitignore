@@ -1,0 +1,8 @@
+node_modules/
+.pnpm-store/
+dist/
+/ios/
+build/
+*.ipa
+.DS_Store
+*.local

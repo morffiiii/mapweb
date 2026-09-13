@@ -1,0 +1,6 @@
+{
+  "appId": "app.terra.explore",
+  "appName": "Terra",
+  "webDir": "dist",
+  "ios": { "contentInset": "never", "backgroundColor": "#e8ece5" }
+}
