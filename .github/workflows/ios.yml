@@ -29,6 +29,18 @@ jobs:
           GPS_PID=$!
           trap 'kill "$GPS_PID" 2>/dev/null || true' EXIT
           xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -destination "platform=iOS Simulator,id=$DEVICE" -parallel-testing-enabled NO -derivedDataPath build/simulator -resultBundlePath build/iOS-tests.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Export UI screenshots
+        if: always()
+        run: |
+          if [ -d build/iOS-tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/iOS-tests.xcresult --output-path build/screenshots
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iOS-screenshots
+          path: build/screenshots
+          retention-days: 7
       - name: Build native iPhone app
         run: |
           xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build

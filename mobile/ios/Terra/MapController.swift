@@ -162,6 +162,9 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         let p = TerraPage(title); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self)
         p.view.alpha = 0; UIView.animate(withDuration: 0.22) { p.view.alpha = 1 }; return p
     }
+    private func closePages() {
+        for child in children where child is TerraPage { child.willMove(toParent: nil); child.view.removeFromSuperview(); child.removeFromParent() }
+    }
     private func settingsPermission() {
         let p = page("Геопозиция")
         p.text("Для записи нужна точная геопозиция. Включи её в настройках Terra на iPhone.")
@@ -281,7 +284,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
                 for point in found { let meters = CLLocation(latitude: point.lat, longitude: point.lng).distance(from: pos)
                     p.action("Неоткрытый участок", detail: "\(Int(meters)) м от тебя", icon: "arrow.up.right") { [weak self, weak p] in
                         self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: point.coordinate, latitudinalMeters: 700, longitudinalMeters: 700), animated: true)
-                        let pin = MKPointAnnotation(); pin.coordinate = point.coordinate; pin.title = "Неоткрытый участок"; self?.map.addAnnotation(pin); p?.close()
+                        let pin = MKPointAnnotation(); pin.coordinate = point.coordinate; pin.title = "Неоткрытый участок"; self?.map.addAnnotation(pin); self?.closePages()
                     }
                 }
             }
@@ -325,7 +328,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         if PersonalStore.shared.data.places.isEmpty { p.text("Удерживай точку на карте, чтобы оставить заметку или фото.") }
         for place in PersonalStore.shared.data.places {
             if let path = place.photo, let image = UIImage(contentsOfFile: PersonalStore.shared.directory.appendingPathComponent(path).path) { let v = UIImageView(image: image); v.contentMode = .scaleAspectFill; v.clipsToBounds = true; v.layer.cornerRadius = 20; v.heightAnchor.constraint(equalToConstant: 170).isActive = true; p.content.addArrangedSubview(v) }
-            p.action(place.note.isEmpty ? "Моё место" : place.note, icon: "mappin") { [weak self, weak p] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng), latitudinalMeters: 700, longitudinalMeters: 700), animated: true); p?.close() }
+            p.action(place.note.isEmpty ? "Моё место" : place.note, icon: "mappin") { [weak self] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng), latitudinalMeters: 700, longitudinalMeters: 700), animated: true); self?.closePages() }
         }
     }
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {

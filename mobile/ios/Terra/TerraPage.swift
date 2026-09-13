@@ -12,6 +12,7 @@ final class TerraPage: UIViewController {
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.accessibilityViewIsModal = true
         view.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.075, green: 0.08, blue: 0.1, alpha: 1) : UIColor(red: 0.97, green: 0.96, blue: 0.94, alpha: 1) }
         view.tintColor = TravelMode.walk.color
         let scroll = UIScrollView(); scroll.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(scroll)

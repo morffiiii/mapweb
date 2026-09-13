@@ -13,6 +13,7 @@ final class MapTests: XCTestCase {
         let gps = app.staticTexts["gpsStatus"]
         expectation(for: NSPredicate(format: "label BEGINSWITH 'GPS'"), evaluatedWith: gps)
         waitForExpectations(timeout: 30)
+        capture(app, "01-map")
         let initial = nativeMap.value as? String
         nativeMap.swipeLeft()
         let moved = NSPredicate { _,_ in (nativeMap.value as? String) != initial }
@@ -28,6 +29,17 @@ final class MapTests: XCTestCase {
         app.terminate(); app.launch()
         app.buttons["История"].tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'км'")).firstMatch.waitForExistence(timeout: 10))
-        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "Native map"; shot.lifetime = .keepAlways; add(shot)
+        capture(app, "02-history")
+        app.buttons["Закрыть"].tap()
+        app.buttons["Профиль"].tap(); capture(app,"03-profile")
+        app.buttons["Закрыть"].tap()
+        app.buttons["Слои"].tap(); capture(app,"04-layers")
+        app.buttons["Закрыть"].tap()
+        app.buttons["Настройки"].tap(); capture(app,"05-settings")
+        app.buttons["Тёмная"].tap()
+        app.buttons["startRecording"].tap()
+        XCTAssertTrue(app.buttons["Завершить"].waitForExistence(timeout: 5))
+        app.buttons["Завершить"].tap()
     }
+    private func capture(_ app: XCUIApplication, _ name: String) { let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot) }
 }
