@@ -7,8 +7,12 @@ final class MapTests: XCTestCase {
             return false
         }
         app.launch()
-        if app.buttons["Продолжить без регистрации"].waitForExistence(timeout: 5) {
-            tap(app.buttons["Продолжить без регистрации"],in: app)
+        if app.buttons["Создать профиль"].waitForExistence(timeout: 5) {
+            XCTAssertFalse(app.buttons["Продолжить без регистрации"].exists)
+            tap(app.buttons["Создать профиль"],in: app)
+            let email = app.textFields["Почта"]; email.tap(); email.typeText("ui-test@example.com")
+            let password = app.secureTextFields["Пароль · от 8 символов"]; password.tap(); password.typeText("Terra-test-2026")
+            tap(app.buttons["Зарегистрироваться"],in: app)
             for _ in 0..<3 { tap(app.buttons["Пропустить"],in: app) }
             capture(app,"00-welcome"); tap(app.buttons["Открыть мой мир"],in: app)
         }
@@ -36,6 +40,9 @@ final class MapTests: XCTestCase {
         app.buttons["История"].tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'км'")).firstMatch.waitForExistence(timeout: 10))
         capture(app, "02-history")
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'км'")).firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "historyRouteMap").firstMatch.waitForExistence(timeout: 10))
+        capture(app,"02-route-map"); app.buttons["Закрыть"].firstMatch.tap()
         app.buttons["Закрыть"].tap()
         app.buttons["Профиль"].tap(); capture(app,"03-profile")
         app.buttons["Закрыть"].tap()

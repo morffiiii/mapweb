@@ -38,28 +38,21 @@ final class FogRenderer: MKOverlayRenderer {
             }
         }
         context.endTransparencyLayer(); context.restoreGState()
-        context.saveGState(); context.clip(to: rect(for: mapRect)); context.setLineCap(.round)
-        for s in fog.sessions {
-            context.setStrokeColor(s.mode.color.cgColor); context.setFillColor(s.mode.color.cgColor); context.setLineWidth(3/zoomScale)
-            for (i,p) in s.points.enumerated() {
-                let b = point(for: MKMapPoint(p.coordinate))
-                if i > 0, s.points[i-1].connects(to: p), abs(s.points[i-1].lng-p.lng) < 180 {
-                    context.beginPath(); context.move(to: point(for: MKMapPoint(s.points[i-1].coordinate))); context.addLine(to: b); context.strokePath()
-                } else { context.fillEllipse(in: CGRect(x: b.x-2/zoomScale, y: b.y-2/zoomScale, width: 4/zoomScale, height: 4/zoomScale)) }
-            }
-        }; context.restoreGState()
     }
 }
 
 final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewControllerDelegate {
     private let map = MKMapView()
     private let engine = TrackingEngine.shared
+    private let activity = UILabel()
     private let status = UILabel(), metric = UILabel(), start = UIButton(type: .system), finish = UIButton(type: .system)
     private let modes = UISegmentedControl(items: TravelMode.allCases.map(\.title))
     private let accent = UIColor(red: 1, green: 0.36, blue: 0.12, alpha: 1)
     private var layer: TravelMode?, centered = false, fog: Fog?, signature = "", timer: Timer?
     private weak var bottomPanel: UIView?
-    private var following = false, wasRecording = false, replayTimer: Timer?, replaySessions: [TrackSession]?
+    private var following = false, wasRecording = false
+    private var showFog: Bool { UserDefaults.standard.object(forKey: "showFog") as? Bool ?? true }
+    private var showPlaces: Bool { UserDefaults.standard.object(forKey: "showPlaces") as? Bool ?? true }
     private var photoHandler: ((UIImage) -> Void)?
     private var selectedMode: TravelMode { TravelMode.allCases[max(0, modes.selectedSegmentIndex)] }
     override func viewDidLoad() {
@@ -72,11 +65,13 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         map.accessibilityIdentifier = "nativeMap"
         map.isAccessibilityElement = true; map.accessibilityLabel = "Карта открытий"; map.accessibilityTraits = .allowsDirectInteraction
         map.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(markPlace(_:))))
-        for place in PersonalStore.shared.data.places { let pin = MKPointAnnotation(); pin.coordinate = CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng); pin.title = place.note; map.addAnnotation(pin) }
+        refreshPlaces()
         let top = UIStackView(); top.axis = .horizontal; top.distribution = .equalSpacing
         let title = UILabel(); title.text = "TERRA ↗"; title.font = .systemFont(ofSize: 27, weight: .black)
-        top.addArrangedSubview(title)
-        top.addArrangedSubview(button("Слои", "square.3.layers.3d", #selector(layers)))
+        let tools = UIStackView(); tools.spacing = 4
+        tools.addArrangedSubview(button("Слои", "square.3.layers.3d", #selector(layers)))
+        tools.addArrangedSubview(button("Настройки", "slider.horizontal.3", #selector(settings)))
+        top.addArrangedSubview(tools); top.addArrangedSubview(title)
         place(top, top: true)
         let panel = UIStackView(); panel.axis = .vertical; panel.spacing = 14
         status.font = .systemFont(ofSize: 12, weight: .medium); status.textColor = .secondaryLabel; status.numberOfLines = 2
@@ -84,7 +79,8 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         metric.font = .monospacedDigitSystemFont(ofSize: 27, weight: .semibold)
         metric.accessibilityIdentifier = "sessionMetrics"
         modes.selectedSegmentIndex = 0; modes.accessibilityIdentifier = "travelModes"
-        panel.addArrangedSubview(status); panel.addArrangedSubview(metric); panel.addArrangedSubview(modes)
+        activity.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium); activity.textColor = .secondaryLabel; activity.accessibilityIdentifier = "activityMetrics"
+        panel.addArrangedSubview(status); panel.addArrangedSubview(metric); panel.addArrangedSubview(activity); panel.addArrangedSubview(modes)
         let actions = UIStackView(); actions.spacing = 10; actions.distribution = .fillEqually
         start.addTarget(self, action: #selector(toggleRecording), for: .touchUpInside); start.accessibilityIdentifier = "startRecording"
         var c = UIButton.Configuration.filled(); c.baseBackgroundColor = accent; c.baseForegroundColor = .white; c.cornerStyle = .large; c.contentInsets = NSDirectionalEdgeInsets(top: 16, leading: 12, bottom: 16, trailing: 12); start.configuration = c
@@ -94,14 +90,13 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         nav.addArrangedSubview(button("История", "clock", #selector(history)))
         nav.addArrangedSubview(button("Где я", "location.fill", #selector(locate)))
         nav.addArrangedSubview(button("Профиль", "person.crop.circle", #selector(profile)))
-        nav.addArrangedSubview(button("Настройки", "slider.horizontal.3", #selector(settings)))
         panel.addArrangedSubview(nav); place(panel, top: false)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: TrackingEngine.changed, object: nil)
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMetrics() }
         refresh()
     }
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); engine.locate() }
-    deinit { timer?.invalidate(); replayTimer?.invalidate(); NotificationCenter.default.removeObserver(self) }
+    deinit { timer?.invalidate(); NotificationCenter.default.removeObserver(self) }
     private func button(_ title: String, _ icon: String, _ action: Selector) -> UIButton {
         let b = UIButton(type: .system); var c = UIButton.Configuration.plain(); c.image = UIImage(systemName: icon); c.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium); c.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12); b.configuration = c; b.accessibilityLabel = title; b.accessibilityIdentifier = title; b.addTarget(self, action: action, for: .touchUpInside); return b
     }
@@ -129,18 +124,20 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         if engine.recording && !wasRecording { following = true }
         wasRecording = engine.recording
         if !centered, let p = engine.position { centered = true; map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true) }
-        if following, engine.recording, let p = engine.position, replaySessions == nil { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }
-        let sessions = (replaySessions ?? (engine.state.sessions + [engine.state.active].compactMap { $0 })).filter { layer == nil || $0.mode.category == layer }
+        if following, engine.recording, let p = engine.position { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }
+        let sessions = (engine.state.sessions + [engine.state.active].compactMap { $0 }).filter { layer == nil || $0.mode.category == layer }
         let key = "\(layer?.rawValue ?? "all"):\(sessions.map { "\($0.id):\($0.points.count)" }.joined(separator: ",")):\(traitCollection.userInterfaceStyle.rawValue)"
         if signature != key {
             signature = key
             if let fog { map.removeOverlay(fog) }
-            let next = Fog(sessions); fog = next; map.addOverlay(next, level: .aboveLabels)
+            let next = Fog(sessions); fog = next; if showFog { map.addOverlay(next, level: .aboveLabels) }
         }
         if let error = engine.takeError(), presentedViewController == nil { alert("Сохранение", error) }
     }
     private func refreshMetrics() {
         status.text = engine.message
+        activity.isHidden = engine.state.active == nil
+        if let s = engine.state.active { activity.text = String(format: "%.1f км/ч · ≈ %.0f активных ккал", ActivityMetrics.speed(s), ActivityMetrics.calories(s, weight: PersonalStore.shared.data.weight)) }
         modes.isEnabled = engine.state.active == nil && engine.pendingMode == nil
         if let s = engine.state.active {
             let seconds = Int(s.duration()); metric.text = String(format: "%.2f км   %02d:%02d", s.distance/1000, seconds/60, seconds%60)
@@ -184,16 +181,22 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     }
     @objc private func layers() {
         let p = page("Слои")
-        p.text("Каждый способ — своя история. В общем слое маршруты различаются цветом.")
+        p.text("Выбери, открытия каких способов показывать на карте.")
+        for (title,key,value) in [("Неоткрытые участки","showFog",showFog),("Мои места","showPlaces",showPlaces)] {
+            let row = UIStackView(); row.alignment = .center; let label = UILabel(); label.text = title; label.textColor = .label; row.addArrangedSubview(label)
+            let toggle = UISwitch(); toggle.isOn = value; toggle.accessibilityLabel = title; toggle.addAction(UIAction { [weak self,weak toggle] _ in UserDefaults.standard.set(toggle?.isOn ?? true,forKey: key); self?.signature = ""; self?.refresh(); self?.refreshPlaces() },for: .valueChanged); row.addArrangedSubview(toggle); p.content.addArrangedSubview(row)
+        }
+        p.action("Неизведанное рядом",icon: "sparkle.magnifyingglass") { [weak self] in self?.nearby() }
         p.action("Все способы", detail: layer == nil ? "Выбран общий слой" : "Показать всё", icon: "square.3.layers.3d") { [weak self, weak p] in self?.layer = nil; self?.refresh(); p?.close() }
         for mode in TravelMode.allCases { p.action(mode.title, detail: layer == mode ? "Выбран" : "", icon: mode.symbol, color: mode.color) { [weak self, weak p] in self?.layer = mode; self?.refresh(); p?.close() } }
     }
-    @objc private func history() {
+    @objc private func history() { history(mode: nil) }
+    private func history(mode: TravelMode?) {
         let p = page("История")
         if engine.state.sessions.isEmpty { p.text("Первый маршрут ещё впереди.", large: true); p.text("Начни прогулку — здесь останутся её путь, время и открытые места.") }
-        for s in engine.state.sessions.reversed() {
+        for s in engine.state.sessions.reversed() where mode == nil || s.mode.category == mode {
             let date = Date(timeIntervalSince1970: s.startedAt/1000).formatted(date: .abbreviated, time: .shortened)
-            p.action("\(s.mode.title) · \(String(format: "%.2f", s.distance/1000)) км", detail: "\(date) · \(Int(s.duration()/60)) мин · Смотреть повтор", icon: "play.circle", color: s.mode.color) { [weak self, weak p] in p?.close(); self?.replay(s) }
+            p.action("\(s.mode.title) · \(String(format: "%.2f", s.distance/1000)) км", detail: "\(date) · \(Int(s.duration()/60)) мин · Открыть карту", icon: "play.circle", color: s.mode.color) { [weak self] in self?.replay(s) }
         }
     }
     @objc private func profile() {
@@ -201,14 +204,6 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         let avatar = UIImageView(); avatar.contentMode = .scaleAspectFill; avatar.clipsToBounds = true; avatar.layer.cornerRadius = 44; avatar.tintColor = accent
         avatar.image = personal.data.avatar.flatMap { UIImage(contentsOfFile: personal.directory.appendingPathComponent($0).path) } ?? UIImage(systemName: "person.crop.circle.fill")
         let avatarRow = UIStackView(); avatarRow.addArrangedSubview(avatar); avatar.widthAnchor.constraint(equalToConstant: 88).isActive = true; avatar.heightAnchor.constraint(equalToConstant: 88).isActive = true; avatarRow.addArrangedSubview(UIView()); p.content.addArrangedSubview(avatarRow)
-        p.action("Изменить фото",icon: "camera") { [weak self,weak p] in
-            var config = PHPickerConfiguration(); config.filter = .images; config.selectionLimit = 1; let picker = PHPickerViewController(configuration: config); picker.delegate = self
-            self?.photoHandler = { [weak self,weak p] image in
-                do { let scale = min(1,800/max(image.size.width,image.size.height)); let size = CGSize(width: image.size.width*scale,height: image.size.height*scale); let resized = UIGraphicsImageRenderer(size: size).image { _ in image.draw(in: CGRect(origin: .zero,size: size)) }; guard let bytes = resized.jpegData(compressionQuality: 0.85) else { throw TrackError.storage }
-                    try FileManager.default.createDirectory(at: personal.directory,withIntermediateDirectories: true); try bytes.write(to: personal.directory.appendingPathComponent("avatar.jpg"),options: .atomic); try personal.update { $0.avatar = "avatar.jpg" }; p?.close(); self?.profile()
-                } catch { self?.alert("Фото",error.localizedDescription) }
-            }; self?.present(picker,animated: true)
-        }
         let name = UILabel(); name.text = personal.data.name; name.font = .systemFont(ofSize: 28, weight: .bold); name.numberOfLines = 2
         p.content.addArrangedSubview(name)
         let sessions = engine.state.sessions, km = sessions.reduce(0) { $0+$1.distance }/1000
@@ -231,30 +226,28 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
             guard current.canRestore else { return }
             do { try personal.update { if $0.restores == nil { $0.restores = [] }; $0.restores?.append(StreakRestore(day: current.yesterday, usedOn: current.today)) }; p?.close(); self?.profile() } catch { self?.alert("Серия", error.localizedDescription) }
         } }
-        let area = p.text("Считаем открытые территории…", large: true)
-        let territoryLabel = p.text(personal.data.territory == nil ? "Выбери свою территорию: круг радиусом 500 м вокруг текущего места. Это личная цель, а не административная граница района." : "Считаем прогресс своей территории…")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let cells = Discovery.cells(sessions)
-            DispatchQueue.main.async { area.text = String(format: "≈ %.3f км² открыто", Double(cells.count)*0.0004)
-                if let t = personal.data.territory { territoryLabel.text = String(format: "Моя территория · %.1f%%\nКруг 500 м вокруг выбранной точки", Explore.coverage(t, cells: cells)) }
-            }
-        }
-        p.action("Исследовать этот квартал", detail: "Задать территорию вокруг меня · 500 м", icon: "scope") { [weak self, weak p] in
-            guard let self, let pos = self.engine.position else { self?.alert("Геопозиция", "Сначала дождись координат GPS."); return }
-            do { try personal.update { $0.territory = Territory(lat: pos.coordinate.latitude, lng: pos.coordinate.longitude) }; p?.close(); self.profile() } catch { self.alert("Сохранение", error.localizedDescription) }
-        }
-        for m in TravelMode.allCases { let routes = sessions.filter { $0.mode.category == m }; p.action(m.title, detail: String(format: "%.2f км · %d маршрутов", routes.reduce(0) { $0+$1.distance }/1000, routes.count), icon: m.symbol, color: m.color) { [weak self, weak p] in self?.layer = m; self?.refresh(); p?.close() } }
-        p.action("Неизведанное рядом", detail: "Найти ещё не открытые участки", icon: "sparkle.magnifyingglass") { [weak self] in self?.nearby() }
+        p.text("ТВОИ РАЗДЕЛЫ")
+        p.action("Статистика", detail: "Все маршруты и способы передвижения", icon: "chart.bar") { [weak self] in self?.statistics() }
         p.action("Мои места", detail: "\(personal.data.places.count) заметок · удерживай карту, чтобы добавить", icon: "mappin.and.ellipse") { [weak self] in self?.places() }
         p.action("Мои цели", detail: "Расстояние, маршруты, открытая площадь", icon: "target") { [weak self] in self?.goals() }
         p.action("Достижения", detail: "Твои открытия в цифрах и наградах", icon: "medal") { [weak self] in self?.achievements() }
         p.action("Личные данные",detail: "Имя, возраст, рост, вес и интересы",icon: "person.text.rectangle") { [weak self] in self?.editProfile() }
-        p.action(LocalAccount.record() == nil ? "Создать локальный профиль" : "Выйти",detail: "Маршруты останутся на этом телефоне",icon: "person.crop.circle") { [weak self] in
+        p.action("Выйти",detail: "Маршруты останутся на этом телефоне",icon: "person.crop.circle") { [weak self] in
             guard self?.engine.state.active == nil else { self?.alert("Маршрут","Сначала заверши текущую запись."); return }; UserDefaults.standard.set(false,forKey: "localSession"); self?.view.window?.rootViewController = WelcomeController()
         }
     }
     private func editProfile() {
         let p = page("Личные данные"), store = PersonalStore.shared
+        let personal = store
+        p.action("Изменить фото",icon: "camera") { [weak self,weak p] in
+            var config = PHPickerConfiguration(); config.filter = .images; config.selectionLimit = 1; let picker = PHPickerViewController(configuration: config); picker.delegate = self
+            self?.photoHandler = { [weak self,weak p] image in
+                do { let scale = min(1,800/max(image.size.width,image.size.height)); let size = CGSize(width: image.size.width*scale,height: image.size.height*scale); let resized = UIGraphicsImageRenderer(size: size).image { _ in image.draw(in: CGRect(origin: .zero,size: size)) }; guard let bytes = resized.jpegData(compressionQuality: 0.85) else { throw TrackError.storage }
+                    try FileManager.default.createDirectory(at: personal.directory,withIntermediateDirectories: true); try bytes.write(to: personal.directory.appendingPathComponent("avatar.jpg"),options: .atomic); try personal.update { $0.avatar = "avatar.jpg" }; p?.close(); self?.profile()
+                } catch { self?.alert("Фото",error.localizedDescription) }
+            }; self?.present(picker,animated: true)
+        }
+
         let values: [(String,String)] = [("Имя",store.data.name),("Возраст",store.data.age.map(String.init) ?? ""),("Рост, см",store.data.height.map { String($0) } ?? ""),("Вес, кг",store.data.weight.map { String($0) } ?? "")]
         var fields: [UITextField] = []
         for (i,value) in values.enumerated() { p.text(value.0); let f = UITextField(); f.text = value.1; f.borderStyle = .roundedRect; f.keyboardType = i == 0 ? .default : i == 1 ? .numberPad : .decimalPad; p.content.addArrangedSubview(f); fields.append(f) }
@@ -264,11 +257,25 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
             guard (a.isEmpty || (Int(a).map { (1...120).contains($0) } ?? false)),(h.isEmpty || (Double(h).map { (50...250).contains($0) } ?? false)),(w.isEmpty || (Double(w).map { (10...400).contains($0) } ?? false)) else { self?.alert("Данные","Проверь возраст, рост и вес или оставь поля пустыми."); return }
             do { try store.update { $0.name = fields[0].text?.isEmpty == false ? String(fields[0].text!.prefix(60)) : "Исследователь"; $0.age = Int(a); $0.height = Double(h); $0.weight = Double(w) }; p?.close(); self?.closePages(); self?.profile() } catch { self?.alert("Данные",error.localizedDescription) }
         }
+        p.text("Интересы · изменения сохраняются сразу")
         for option in ["Больше гулять","Открывать новые места","Кататься на велосипеде","Следить за активностью"] {
-            p.action(option,detail: store.data.intentions?.contains(option) == true ? "Выбрано · нажми, чтобы убрать" : "Добавить в интересы",icon: "sparkle") { [weak self,weak p] in do { try store.update { var choices = $0.intentions ?? []; if choices.contains(option) { choices.removeAll { $0 == option } } else { choices.append(option) }; $0.intentions = choices }; p?.close(); self?.editProfile() } catch { self?.alert("Данные",error.localizedDescription) } }
+            let b = UIButton(type: .system); var c = UIButton.Configuration.tinted(); c.title = option; c.imagePadding = 12; c.contentInsets = NSDirectionalEdgeInsets(top: 18,leading: 16,bottom: 18,trailing: 16); c.baseForegroundColor = .label; c.cornerStyle = .large; b.configuration = c
+            func update(_ b: UIButton) { let active = store.data.intentions?.contains(option) == true; b.configuration?.image = UIImage(systemName: active ? "checkmark.circle.fill" : "circle"); b.configuration?.baseBackgroundColor = active ? TravelMode.walk.color : .secondarySystemBackground; b.accessibilityValue = active ? "Выбрано" : "Не выбрано" }
+            update(b); b.addAction(UIAction { [weak self, weak b] _ in
+                do { try store.update { var choices = $0.intentions ?? []; if choices.contains(option) { choices.removeAll { $0 == option } } else { choices.append(option) }; $0.intentions = choices }; if let b { update(b) } } catch { self?.alert("Данные",error.localizedDescription) }
+            },for: .touchUpInside); p.content.addArrangedSubview(b)
         }
-        p.text("Как узнал о Terra")
-        for option in ["Друзья","Социальные сети","Поиск","Другое"] { p.action(option,detail: store.data.source == option ? "Выбрано" : "",icon: "bubble") { [weak self,weak p] in do { try store.update { $0.source = option }; p?.close(); self?.editProfile() } catch { self?.alert("Данные",error.localizedDescription) } } }
+    }
+    private func statistics() {
+        let p = page("Статистика"), sessions = engine.state.sessions
+        p.text(String(format: "%.2f км",sessions.reduce(0) { $0+$1.distance }/1000),large: true)
+        p.text("\(sessions.count) маршрутов · \(Int(sessions.reduce(0) { $0+$1.duration() }/60)) минут")
+        let area = p.text("Считаем открытую площадь…")
+        DispatchQueue.global(qos: .userInitiated).async { let cells = Discovery.cells(sessions); DispatchQueue.main.async { area.text = String(format: "≈ %.3f км² открыто",Double(cells.count)*0.0004) } }
+        for m in TravelMode.allCases { let routes = sessions.filter { $0.mode.category == m }; p.action(m.title,detail: String(format: "%.2f км · %d маршрутов",routes.reduce(0) { $0+$1.distance }/1000,routes.count),icon: m.symbol,color: m.color) { [weak self] in self?.history(mode: m) } }
+        let calories = sessions.reduce(0) { $0+ActivityMetrics.calories($1,weight: PersonalStore.shared.data.weight) }
+        p.text(String(format: "≈ %.0f активных ккал",calories),large: true)
+        p.text("Оценка для ходьбы и велосипеда по скорости, времени движения и весу. Без веса используем 70 кг. Возраст и рост в этой формуле не участвуют. Паузы и поездки на авто не добавляют активных калорий; это не измерение расхода энергии.")
     }
     private func goals() {
         let p = page("Мои цели"), store = PersonalStore.shared, sessions = engine.state.sessions
@@ -330,22 +337,33 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         }
     }
     private func replay(_ session: TrackSession) {
-        guard !session.points.isEmpty else { return }
-        replayTimer?.invalidate(); following = false; layer = nil
-        let base = engine.state.sessions.filter { $0.id != session.id }
-        var bounds = MKMapRect.null; session.points.forEach { bounds = bounds.union(MKMapRect(origin: MKMapPoint($0.coordinate), size: MKMapSize(width: 1, height: 1))) }
-        map.setVisibleMapRect(bounds, edgePadding: UIEdgeInsets(top: 140, left: 60, bottom: 340, right: 60), animated: true)
-        var frame = 0
-        replayTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }; frame += 1
-            var partial = session; partial.points = Array(session.points.prefix(max(1, session.points.count*frame/75)))
-            self.replaySessions = base+[partial]; self.signature = ""; self.refresh(); self.status.text = "Повтор маршрута · \(min(100, frame*100/75))%"
-            if frame >= 75 { timer.invalidate(); self.replaySessions = nil; self.signature = ""; self.refresh() }
+        let p = RoutePage(session); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth,.flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self)
+    }
+    private func refreshPlaces() {
+        map.removeAnnotations(map.annotations.filter { $0 is PlacePin })
+        if showPlaces { for place in PersonalStore.shared.data.places { map.addAnnotation(PlacePin(place)) } }
+    }
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        guard let pin = view.annotation as? PlacePin else { return }; mapView.deselectAnnotation(pin,animated: false); placeDetails(pin.place)
+    }
+    private func placeDetails(_ place: Place) {
+        let p = page("Место")
+        p.text(place.note.isEmpty ? "Моё место" : place.note,large: true)
+        if let path = place.photo, let image = UIImage(contentsOfFile: PersonalStore.shared.directory.appendingPathComponent(path).path) { let v = UIImageView(image: image); v.contentMode = .scaleAspectFit; v.heightAnchor.constraint(equalToConstant: 240).isActive = true; p.content.addArrangedSubview(v) }
+        p.action("Показать на карте",icon: "map") { [weak self] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat,longitude: place.lng),latitudinalMeters: 700,longitudinalMeters: 700),animated: true); self?.closePages() }
+        p.action("Редактировать",icon: "pencil") { [weak self] in self?.editPlace(place) }
+        p.action("Удалить место",icon: "trash",color: .systemRed) { [weak self] in
+            guard let self else { return }; let confirm = self.page("Удалить место?"); confirm.text("Заметка исчезнет из твоих мест и с карты.")
+            confirm.action("Удалить",icon: "trash",color: .systemRed) { [weak self] in do { try PersonalStore.shared.update { $0.places.removeAll { $0.id == place.id } }; self?.refreshPlaces(); self?.closePages(); self?.places() } catch { self?.alert("Место",error.localizedDescription) } }
         }
     }
     @objc private func markPlace(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }; let coordinate = map.convert(gesture.location(in: map), toCoordinateFrom: map)
-        let p = page("Новое место"), text = UITextView(); text.font = .systemFont(ofSize: 18); text.backgroundColor = .secondarySystemBackground; text.layer.cornerRadius = 16; text.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        editPlace(Place(lat: coordinate.latitude,lng: coordinate.longitude,note: ""),isNew: true)
+    }
+    private func editPlace(_ original: Place, isNew: Bool = false) {
+        let p = page(isNew ? "Новое место" : "Редактировать место"), text = UITextView(); text.font = .systemFont(ofSize: 18); text.backgroundColor = .secondarySystemBackground; text.layer.cornerRadius = 16; text.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        text.text = original.note
         p.text("Что хочется запомнить здесь?"); p.content.addArrangedSubview(text)
         let preview = UIImageView(); preview.contentMode = .scaleAspectFit; preview.heightAnchor.constraint(equalToConstant: 180).isActive = true; preview.isHidden = true; p.content.addArrangedSubview(preview)
         var photo: UIImage?
@@ -355,10 +373,10 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
             self?.photoHandler = { image in photo = image; preview?.image = image; preview?.isHidden = false }; self?.present(picker, animated: true)
         }
         p.action("Сохранить место", icon: "mappin") { [weak self, weak p, weak text] in
-            let store = PersonalStore.shared; var place = Place(lat: coordinate.latitude, lng: coordinate.longitude, note: String((text?.text ?? "Моё место").prefix(2000)))
+            let store = PersonalStore.shared; var place = original; place.note = String((text?.text ?? "Моё место").prefix(2000))
             do {
                 if let photo { let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: max(1,1200*photo.size.height/photo.size.width))); let resized = renderer.image { _ in photo.draw(in: CGRect(x: 0, y: 0, width: 1200, height: max(1,1200*photo.size.height/photo.size.width))) }; if let bytes = resized.jpegData(compressionQuality: 0.8) { try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true); place.photo = "place-\(place.id).jpg"; try bytes.write(to: store.directory.appendingPathComponent(place.photo!), options: .atomic) } }
-                try store.update { $0.places.append(place) }; let pin = MKPointAnnotation(); pin.coordinate = coordinate; pin.title = place.note; self?.map.addAnnotation(pin); p?.close()
+                try store.update { if isNew { $0.places.append(place) } else if let index = $0.places.firstIndex(where: { $0.id == place.id }) { $0.places[index] = place } }; self?.refreshPlaces(); self?.closePages(); self?.placeDetails(place)
             } catch { self?.alert("Место", error.localizedDescription) }
         }
     }
@@ -367,7 +385,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         if PersonalStore.shared.data.places.isEmpty { p.text("Удерживай точку на карте, чтобы оставить заметку или фото.") }
         for place in PersonalStore.shared.data.places {
             if let path = place.photo, let image = UIImage(contentsOfFile: PersonalStore.shared.directory.appendingPathComponent(path).path) { let v = UIImageView(image: image); v.contentMode = .scaleAspectFill; v.clipsToBounds = true; v.layer.cornerRadius = 20; v.heightAnchor.constraint(equalToConstant: 170).isActive = true; p.content.addArrangedSubview(v) }
-            p.action(place.note.isEmpty ? "Моё место" : place.note, icon: "mappin") { [weak self] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng), latitudinalMeters: 700, longitudinalMeters: 700), animated: true); self?.closePages() }
+            p.action(place.note.isEmpty ? "Моё место" : place.note, icon: "mappin") { [weak self] in self?.placeDetails(place) }
         }
     }
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
@@ -386,4 +404,9 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         }
     }
 
+}
+
+private final class PlacePin: MKPointAnnotation {
+    let place: Place
+    init(_ place: Place) { self.place = place; super.init(); coordinate = CLLocationCoordinate2D(latitude: place.lat,longitude: place.lng); title = place.note.isEmpty ? "Моё место" : place.note }
 }

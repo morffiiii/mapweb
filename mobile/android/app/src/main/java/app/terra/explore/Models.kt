@@ -24,13 +24,14 @@ data class Point(val lat: Double, val lng: Double, val t: Long, val accuracy: Do
 }
 
 object Discovery {
+    const val radius = 17.5
     fun cells(sessions: List<Session>): Set<String> {
         val cells=hashSetOf<String>()
         fun stamp(p: Point) {
             val row=floor(p.lat*111195/20).toInt()
             for(y in row-2..row+2) {
                 val lat=(y+0.5)*20/111195; val step=20/(111195*cos(Math.toRadians(lat))); val column=floor(p.lng/step).toInt()
-                for(x in column-2..column+2) if(p.distance(Point(lat,(x+0.5)*step,p.t,0.0))<=35) cells.add("$y:$x")
+                for(x in column-2..column+2) if(p.distance(Point(lat,(x+0.5)*step,p.t,0.0))<=radius) cells.add("$y:$x")
             }
         }
         for(s in sessions) for((i,p) in s.points.withIndex()) {

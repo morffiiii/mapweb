@@ -13,7 +13,7 @@ final class WelcomeController: UIViewController {
         let p = page("TERRA ↗"); p.text("Мир становится твоим шаг за шагом.",large: true); p.text("Открывай карту прогулками, сохраняй места и находи свой ритм.")
         if LocalAccount.record() == nil {
             p.action("Создать профиль",icon: "person.crop.circle.badge.plus") { [weak self] in self?.credentials(register: true) }
-            p.action("Продолжить без регистрации",icon: "arrow.right") { [weak self] in self?.details() }
+
         }
         p.action("Войти",icon: "person.crop.circle") { [weak self] in self?.credentials(register: false) }
         p.text("Пока профиль работает только на этом телефоне. Облачного переноса и восстановления по почте ещё нет.")

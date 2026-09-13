@@ -75,7 +75,7 @@ enum TrackError: LocalizedError {
 }
 // A local equal-distance grid estimates union area, including overlapping routes only once.
 enum Discovery {
-    static let radius = 35.0
+    static let radius = 17.5
     static func cells(_ sessions: [TrackSession]) -> Set<String> {
         var result = Set<String>()
         func stamp(_ p: TrackPoint) {
