@@ -190,8 +190,8 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         p.action("Все способы", detail: layer == nil ? "Выбран общий слой" : "Показать всё", icon: "square.3.layers.3d") { [weak self, weak p] in self?.layer = nil; self?.refresh(); p?.close() }
         for mode in TravelMode.allCases { p.action(mode.title, detail: layer == mode ? "Выбран" : "", icon: mode.symbol, color: mode.color) { [weak self, weak p] in self?.layer = mode; self?.refresh(); p?.close() } }
     }
-    @objc private func history() { history(mode: nil) }
-    private func history(mode: TravelMode?) {
+    @objc private func history() { showHistory(mode: nil) }
+    private func showHistory(mode: TravelMode?) {
         let p = page("История")
         if engine.state.sessions.isEmpty { p.text("Первый маршрут ещё впереди.", large: true); p.text("Начни прогулку — здесь останутся её путь, время и открытые места.") }
         for s in engine.state.sessions.reversed() where mode == nil || s.mode.category == mode {
@@ -271,7 +271,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         p.text("\(sessions.count) маршрутов · \(Int(sessions.reduce(0) { $0+$1.duration() }/60)) минут")
         let area = p.text("Считаем открытую площадь…")
         DispatchQueue.global(qos: .userInitiated).async { let cells = Discovery.cells(sessions); DispatchQueue.main.async { area.text = String(format: "≈ %.3f км² открыто",Double(cells.count)*0.0004) } }
-        for m in TravelMode.allCases { let routes = sessions.filter { $0.mode.category == m }; p.action(m.title,detail: String(format: "%.2f км · %d маршрутов",routes.reduce(0) { $0+$1.distance }/1000,routes.count),icon: m.symbol,color: m.color) { [weak self] in self?.history(mode: m) } }
+        for m in TravelMode.allCases { let routes = sessions.filter { $0.mode.category == m }; p.action(m.title,detail: String(format: "%.2f км · %d маршрутов",routes.reduce(0) { $0+$1.distance }/1000,routes.count),icon: m.symbol,color: m.color) { [weak self] in self?.showHistory(mode: m) } }
         let calories = sessions.reduce(0) { $0+ActivityMetrics.calories($1,weight: PersonalStore.shared.data.weight) }
         p.text(String(format: "≈ %.0f активных ккал",calories),large: true)
         p.text("Оценка для ходьбы и велосипеда по скорости, времени движения и весу. Без веса используем 70 кг. Возраст и рост в этой формуле не участвуют. Паузы и поездки на авто не добавляют активных калорий; это не измерение расхода энергии.")
