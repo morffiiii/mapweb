@@ -17,6 +17,28 @@ data class Point(val lat: Double, val lng: Double, val t: Long, val accuracy: Do
     fun json() = JSONObject().put("lat",lat).put("lng",lng).put("t",t).put("accuracy",accuracy).put("break",gap)
     companion object { fun parse(j: JSONObject) = Point(j.getDouble("lat"),j.getDouble("lng"),j.getLong("t"),j.getDouble("accuracy"),j.optBoolean("break")) }
 }
+
+object Discovery {
+    fun cells(sessions: List<Session>): Set<String> {
+        val cells=hashSetOf<String>()
+        fun stamp(p: Point) {
+            val row=floor(p.lat*111195/20).toInt()
+            for(y in row-2..row+2) {
+                val lat=(y+0.5)*20/111195; val step=20/(111195*cos(Math.toRadians(lat))); val column=floor(p.lng/step).toInt()
+                for(x in column-2..column+2) if(p.distance(Point(lat,(x+0.5)*step,p.t,0.0))<=35) cells.add("$y:$x")
+            }
+        }
+        for(s in sessions) for((i,p) in s.points.withIndex()) {
+            stamp(p)
+            if(i>0 && s.points[i-1].connects(p)) {
+                val a=s.points[i-1]; val count=ceil(a.distance(p)/15).toInt().coerceAtMost(500)
+                var dlng=p.lng-a.lng; if(dlng>180) dlng-=360; if(dlng< -180) dlng+=360
+                for(j in 1 until count) { val f=j.toDouble()/count; stamp(Point(a.lat+(p.lat-a.lat)*f,(a.lng+dlng*f+540)%360-180,p.t,0.0)) }
+            }
+        }
+        return cells
+    }
+}
 data class Session(val id: String = java.util.UUID.randomUUID().toString(), val mode: Mode, val startedAt: Long = System.currentTimeMillis(), var endedAt: Long? = null, var pausedAt: Long? = null, var pausedMs: Long = 0, var breakNext: Boolean = false, val points: MutableList<Point> = mutableListOf()) {
     fun distance() = points.zipWithNext().sumOf { (a,b) -> if(a.connects(b)) a.distance(b) else 0.0 }
     fun duration(now: Long = System.currentTimeMillis()) = ((endedAt ?: pausedAt ?: now)-startedAt-pausedMs).coerceAtLeast(0)/1000

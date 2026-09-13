@@ -22,7 +22,7 @@ targets:
         NSLocationWhenInUseUsageDescription: 'Геопозиция показывает тебя на карте. После нажатия «Начать» Terra сохраняет маршрут и открывает пройденные участки.'
         NSLocationAlwaysAndWhenInUseUsageDescription: 'Начатый маршрут продолжает записываться при блокировке экрана. Заверши запись в Terra, чтобы остановить её.'
         UIBackgroundModes: [location]
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         LSSupportsOpeningDocumentsInPlace: true
     settings:

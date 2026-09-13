@@ -2,6 +2,10 @@ package app.terra.explore
 import org.junit.Test
 import org.junit.Assert.*
 class TrackingTests {
+    @Test fun overlappingDiscoveryCountedOnce() {
+        val s=Session(mode=Mode.walk,startedAt=0,points=mutableListOf(Point(55.0,37.0,1000,5.0)))
+        assertTrue(Discovery.cells(listOf(s)).isNotEmpty()); assertEquals(Discovery.cells(listOf(s)),Discovery.cells(listOf(s,s)))
+    }
     @Test fun filtersGPS() {
         val a=Point(55.0,37.0,1000,5.0)
         assertFalse(Point(55.0,37.1,2000,5.0).accepts(a,Mode.walk))

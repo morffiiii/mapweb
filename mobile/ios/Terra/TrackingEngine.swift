@@ -119,7 +119,9 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
         guard data.count <= 25_000_000 else { throw TrackError.invalidBackup }
         let backup = try JSONDecoder().decode(Backup.self, from: data); try backup.validate()
         var ids = Set(state.sessions.map(\.id))
-        for session in backup.sessions where !ids.contains(session.id) { state.sessions.append(session); ids.insert(session.id) }
+        var merged = state.sessions
+        for session in backup.sessions where !ids.contains(session.id) { merged.append(session); ids.insert(session.id) }
+        try Backup(sessions: merged).validate(); state.sessions = merged
         try persist(); message = "Маршруты восстановлены"; notify()
     }
     func exportURL() throws -> URL {

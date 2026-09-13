@@ -56,4 +56,7 @@ class TrackingService: Service(), LocationListener {
     private fun finish() { store.pending=null; store.active?.let { val now=System.currentTimeMillis(); it.pausedAt?.let { p -> it.pausedMs+=now-p }; it.pausedAt=null; it.endedAt=now; store.sessions.add(it) }; store.active=null; store.save(); store.message="Маршрут сохранён"; store.notifyChanged(); stopSelf() }
     override fun onDestroy() { location.removeUpdates(this); if(store.active?.pausedAt==null && store.active!=null) { store.active?.pausedAt=System.currentTimeMillis(); store.save() }; store.pending=null; store.notifyChanged(); super.onDestroy() }
     override fun onProviderDisabled(provider: String) { store.message="Нет GPS. Проверь, включена ли геолокация."; store.notifyChanged() }
+    override fun onProviderEnabled(provider: String) {}
+    @Deprecated("Required on Android 8–10")
+    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
 }

@@ -42,7 +42,9 @@ class Store private constructor(context: Context) {
         val array=root.getJSONArray("sessions"); require(array.length()<=10000)
         val incoming=(0 until array.length()).map { Session.parse(array.getJSONObject(it)).also { s -> s.validate() } }
         require(incoming.sumOf { it.points.size }<=200000 && incoming.map { it.id }.toSet().size==incoming.size)
-        val ids=sessions.map { it.id }.toSet(); sessions.addAll(incoming.filter { it.id !in ids }); check(save()); message="Маршруты восстановлены"; notifyChanged()
+        val ids=sessions.map { it.id }.toSet(); val merged=sessions+incoming.filter { it.id !in ids }
+        require(merged.size<=10000 && merged.sumOf { it.points.size }<=200000)
+        sessions.clear(); sessions.addAll(merged); check(save()); message="Маршруты восстановлены"; notifyChanged()
     }
     companion object { @Volatile private var instance: Store? = null; fun get(context: Context): Store = instance ?: synchronized(this) { instance ?: Store(context.applicationContext).also { instance=it } } }
 }

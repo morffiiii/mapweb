@@ -15,6 +15,8 @@ import org.maplibre.android.maps.*
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import kotlin.math.*
+import org.maplibre.android.module.http.HttpRequestUtil
+import okhttp3.OkHttpClient
 
 class MainActivity: Activity(), LocationListener {
     private lateinit var mapView: MapView
@@ -36,7 +38,9 @@ class MainActivity: Activity(), LocationListener {
     private val tick=object: Runnable { override fun run() { refresh(); handler.postDelayed(this,1000) } }
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     override fun onCreate(state: Bundle?) {
-        super.onCreate(state); MapLibre.getInstance(this); store=Store.get(this); location=getSystemService(LocationManager::class.java)
+        super.onCreate(state); MapLibre.getInstance(this)
+        HttpRequestUtil.setOkHttpClient(OkHttpClient.Builder().addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent","Terra/2.0 (https://github.com/morffiiii/mapweb)").build()) }.build())
+        store=Store.get(this); location=getSystemService(LocationManager::class.java)
         dark=when(getPreferences(0).getInt("theme",0)) { 1 -> false; 2 -> true; else -> resources.configuration.uiMode and 0x30 == 0x20 }
         window.statusBarColor=if(dark) Color.rgb(24,26,31) else Color.WHITE
         window.navigationBarColor=window.statusBarColor
@@ -55,7 +59,9 @@ class MainActivity: Activity(), LocationListener {
         val actions=LinearLayout(this); start=button("Начать прогулку ↗") { toggle() }; start.setTextColor(Color.WHITE); start.background=shape(accent)
         finish=button("Завершить") { command("stop") }; actions.addView(start,LinearLayout.LayoutParams(0,dp(54),1f)); actions.addView(finish,LinearLayout.LayoutParams(0,dp(54),1f)); bottom.addView(actions)
         val nav=LinearLayout(this)
-        nav.addView(button("История") { history() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(button("Где я") { locate() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(button("Настройки") { settings() },LinearLayout.LayoutParams(0,dp(54),1f)); bottom.addView(nav); panel(root,bottom,false)
+        nav.addView(button("История") { history() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(button("Где я") { locate() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(button("Настройки") { settings() },LinearLayout.LayoutParams(0,dp(54),1f)); bottom.addView(nav)
+        val attribution=text("© OpenStreetMap contributors · MapLibre",10)
+        attribution.setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) }; bottom.addView(attribution); panel(root,bottom,false)
         mapView.getMapAsync { m -> map=m; m.uiSettings.isCompassEnabled=true; m.addOnCameraMoveListener { fog.invalidate() }; loadStyle(); refresh() }
         store.listeners.add(refreshListener); refresh()
     }
@@ -111,7 +117,11 @@ class MainActivity: Activity(), LocationListener {
         val sessions=store.sessions.reversed()
         if(sessions.isEmpty()) { alert("Здесь появятся твои прогулки"); return }
         val labels=sessions.map { "${it.mode.title} · %.2f км\n%s · %d мин".format(it.distance()/1000,java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(it.startedAt)),it.duration()/60) }
-        AlertDialog.Builder(this).setTitle("История").setItems(labels.toTypedArray()) { _,i -> val s=sessions[i]; layer=s.mode; s.points.firstOrNull()?.let { map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat,it.lng),15.0)) }; fog.invalidate() }.setNegativeButton("Закрыть",null).show()
+        val dialog=AlertDialog.Builder(this).setTitle("История · ${sessions.size} маршрутов").setItems(labels.toTypedArray()) { _,i -> val s=sessions[i]; layer=s.mode; s.points.firstOrNull()?.let { map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat,it.lng),15.0)) }; fog.invalidate() }.setNegativeButton("Закрыть",null).show()
+        Thread {
+            val area=Discovery.cells(sessions).size*400.0/1000000
+            runOnUiThread { if(dialog.isShowing) dialog.setTitle("%.2f км · ≈ %.3f км² открыто".format(sessions.sumOf { it.distance() }/1000,area)) }
+        }.start()
     }
     private fun settings() {
         val items=arrayOf("Тема системы","Светлая тема","Тёмная тема","Экспорт маршрутов","Импорт маршрутов","О записи в фоне")
@@ -125,11 +135,18 @@ class MainActivity: Activity(), LocationListener {
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request,result,data); if(result!=RESULT_OK) return; val uri=data?.data ?: return
         try { if(request==30) { contentResolver.openOutputStream(uri)?.use { it.write(store.export()) } ?: error("Файл недоступен") }
-            if(request==31) { val bytes=contentResolver.openInputStream(uri)?.use { it.readNBytes(25000001) } ?: error("Файл недоступен"); store.import(bytes) }
+            if(request==31) { val bytes=contentResolver.openInputStream(uri)?.use { input ->
+                val output=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
+                while(true) { val count=input.read(buffer); if(count<0) break; require(output.size()+count<=25000000) { "Файл слишком большой" }; output.write(buffer,0,count) }; output.toByteArray()
+            } ?: error("Файл недоступен"); store.import(bytes) }
         } catch(e: Exception) { alert("Не удалось обработать файл: ${e.localizedMessage}") }
     }
     private fun alert(message: String) { AlertDialog.Builder(this).setMessage(message).setPositiveButton("Понятно",null).show() }
     override fun onLocationChanged(l: Location) { if(System.currentTimeMillis()-l.time !in -5000..30000) return; store.position=Point(l.latitude,l.longitude,l.time,l.accuracy.toDouble()); if(store.active?.pausedAt!=null || (store.active==null && store.pending==null)) store.message="GPS ±${l.accuracy.toInt()} м"; refresh() }
+    override fun onProviderEnabled(provider: String) {}
+    override fun onProviderDisabled(provider: String) { store.message="Нет GPS. Включи геолокацию в настройках."; refresh() }
+    @Deprecated("Required on Android 8–10")
+    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onStart() { super.onStart(); mapView.onStart() }
     override fun onResume() { super.onResume(); mapView.onResume(); watch(); handler.post(tick) }
     override fun onPause() { handler.removeCallbacks(tick); location.removeUpdates(this); mapView.onPause(); super.onPause() }

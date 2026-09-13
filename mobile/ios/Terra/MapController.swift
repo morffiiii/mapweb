@@ -48,6 +48,7 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
     private let modes = UISegmentedControl(items: TravelMode.allCases.map(\.title))
     private let accent = UIColor(red: 1, green: 0.36, blue: 0.12, alpha: 1)
     private var layer: TravelMode?, centered = false, fog: Fog?, signature = "", timer: Timer?
+    private weak var bottomPanel: UIView?
     private var selectedMode: TravelMode { TravelMode.allCases[max(0, modes.selectedSegmentIndex)] }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -91,9 +92,14 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         let bg = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial)); bg.layer.cornerRadius = 24; bg.clipsToBounds = true
         bg.translatesAutoresizingMaskIntoConstraints = false; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(bg); bg.contentView.addSubview(stack)
+        if !top { bottomPanel = bg }
         NSLayoutConstraint.activate([bg.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14), bg.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
             stack.topAnchor.constraint(equalTo: bg.contentView.topAnchor, constant: 16), stack.bottomAnchor.constraint(equalTo: bg.contentView.bottomAnchor, constant: -16), stack.leadingAnchor.constraint(equalTo: bg.contentView.leadingAnchor, constant: 16), stack.trailingAnchor.constraint(equalTo: bg.contentView.trailingAnchor, constant: -16),
             top ? bg.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8) : bg.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8)])
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        map.layoutMargins = UIEdgeInsets(top: 110, left: 16, bottom: bottomPanel.map { view.bounds.height-$0.frame.minY+8 } ?? 320, right: 16)
     }
     private func applyTheme() {
         let theme = UserDefaults.standard.integer(forKey: "nativeTheme")
@@ -168,13 +174,25 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
     }
     private func alert(_ title: String, _ message: String) { let a = UIAlertController(title: title, message: message, preferredStyle: .alert); a.addAction(UIAlertAction(title: "Понятно", style: .default)); present(a, animated: true) }
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer { let r = FogRenderer(overlay: overlay); r.dark = traitCollection.userInterfaceStyle == .dark; return r }
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) { mapView.accessibilityValue = String(format: "%.5f, %.5f", mapView.centerCoordinate.latitude, mapView.centerCoordinate.longitude) }
 }
 
 final class HistoryController: UITableViewController {
     let sessions: [TrackSession], select: (TrackSession) -> Void
     init(sessions: [TrackSession], select: @escaping (TrackSession) -> Void) { self.sessions = sessions.reversed(); self.select = select; super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func viewDidLoad() { super.viewDidLoad(); title = "История"; navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(close)); if sessions.isEmpty { let l = UILabel(); l.text = "Здесь появятся твои прогулки"; l.textAlignment = .center; tableView.backgroundView = l } }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "История"; navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(close))
+        if sessions.isEmpty { let l = UILabel(); l.text = "Здесь появятся твои прогулки"; l.textAlignment = .center; tableView.backgroundView = l }
+        let summary = UILabel(frame: CGRect(x: 20, y: 0, width: 300, height: 90)); summary.numberOfLines = 3; summary.textAlignment = .center; summary.font = .systemFont(ofSize: 16, weight: .medium)
+        let distance = sessions.reduce(0) { $0+$1.distance }/1000
+        summary.text = "\(sessions.count) маршрутов · \(String(format: "%.2f", distance)) км\nСчитаем открытые территории…"; tableView.tableHeaderView = summary
+        let snapshot = sessions
+        DispatchQueue.global(qos: .userInitiated).async {
+            let area = Double(Discovery.cells(snapshot).count)*400/1_000_000
+            DispatchQueue.main.async { summary.text = "\(snapshot.count) маршрутов · \(String(format: "%.2f", distance)) км\n≈ \(String(format: "%.3f", area)) км² открыто" }
+        }
+    }
     @objc private func close() { dismiss(animated: true) }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sessions.count }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
