@@ -3,7 +3,9 @@ import XCTest
 final class ActivityMetricsTests: XCTestCase {
     private var walk: TrackSession { TrackSession(mode: .walk,startedAt: 1000,points: [TrackPoint(lat: 0,lng: 0,t: 1000,accuracy: 5),TrackPoint(lat: 0.0001,lng: 0,t: 11000,accuracy: 5)]) }
     func testFreshSpeedAndPause() {
-        XCTAssertEqual(ActivityMetrics.speed(walk,now: 11000),4.003,accuracy: 0.02)
+        // Core Location uses an ellipsoidal Earth: 0.0001° latitude at the
+        // equator is about 11.0574 m, rather than the spherical 11.1195 m.
+        XCTAssertEqual(ActivityMetrics.speed(walk,now: 11000),3.980674,accuracy: 0.001)
         XCTAssertEqual(ActivityMetrics.speed(walk,now: 30000),0)
         var paused = walk; paused.pausedAt = 11000; XCTAssertEqual(ActivityMetrics.speed(paused,now: 11000),0)
     }

@@ -2,6 +2,7 @@ import XCTest
 final class MapTests: XCTestCase {
     func testNativeMapAndControls() {
         let app = XCUIApplication()
+        continueAfterFailure = false
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Разрешить при использовании"] { if alert.buttons[title].exists { alert.buttons[title].tap(); return true } }
             return false

@@ -23,7 +23,12 @@ enum LocalAccount {
         var salt = [UInt8](repeating: 0,count: 16); guard SecRandomCopyBytes(kSecRandomDefault,16,&salt) == errSecSuccess, let hash = derive(password,salt: Data(salt)) else { throw AccountError.storage }
         let bytes = try JSONEncoder().encode(Record(email: email.lowercased(),salt: Data(salt),hash: hash))
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,kSecAttrAccount as String: "local",kSecValueData as String: bytes,kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
-        guard SecItemAdd(query as CFDictionary,nil) == errSecSuccess else { throw AccountError.storage }
+        let status = SecItemAdd(query as CFDictionary,nil)
+        guard status == errSecSuccess else {
+            // Status only; never print the account, password or derived key.
+            NSLog("Terra Keychain write failed: %d",status)
+            throw AccountError.storage
+        }
     }
     static func login(email: String,password: String) -> Bool {
         guard let r = record(), r.email == email.lowercased(), let actual = derive(password,salt: r.salt), actual.count == r.hash.count else { return false }
