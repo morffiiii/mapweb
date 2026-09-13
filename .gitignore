@@ -6,3 +6,7 @@ build/
 *.ipa
 .DS_Store
 *.local
+**/.gradle/
+**/*.xcodeproj/
+mobile/ios/Terra/Info.plist
+*.apk

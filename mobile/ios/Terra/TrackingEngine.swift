@@ -1,0 +1,162 @@
+import UIKit
+import CoreLocation
+
+final class TrackingEngine: NSObject, CLLocationManagerDelegate {
+    static let shared = TrackingEngine()
+    static let changed = Notification.Name("TerraTrackingChanged")
+    private(set) var state = TrackState()
+    private(set) var position: CLLocation?
+    private(set) var message = "Определяем местоположение…"
+    private(set) var blocked = false
+    private(set) var pendingMode: TravelMode?
+    private var resumePending = false
+    private let manager = CLLocationManager()
+    private var durableState = TrackState()
+    private var visible = true
+    private var errorMessage: String?
+    private var file: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("terra-state.json") }
+    private var now: Double { Date().timeIntervalSince1970*1000 }
+    var recording: Bool { state.active != nil && state.active?.pausedAt == nil }
+    var authorized: Bool { manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse }
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 4
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.showsBackgroundLocationIndicator = true
+        do {
+            if FileManager.default.fileExists(atPath: file.path) {
+                let data = try Data(contentsOf: file)
+                state = try JSONDecoder().decode(TrackState.self, from: data)
+                try Backup(sessions: state.sessions).validate()
+                try state.active?.validate(finished: false)
+                durableState = state
+                if var session = state.active, session.pausedAt == nil {
+                    session.pausedAt = session.lastRecordedAt ?? session.points.last?.t ?? session.startedAt
+                    session.breakNext = true; state.active = session
+                    message = "Предыдущая запись прервалась. Нажми «Продолжить»."
+                    try persist()
+                }
+            }
+        } catch { blocked = true; message = "Не удалось прочитать сохранение. Исходный файл не изменён." }
+    }
+    private func notify() { NotificationCenter.default.post(name: Self.changed, object: self) }
+    private func persist() throws {
+        guard !blocked else { throw TrackError.storage }
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(state).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            durableState = state
+        } catch {
+            state = durableState
+            if state.active != nil { state.active?.pausedAt = now }
+            pendingMode = nil; resumePending = false
+            manager.stopUpdatingLocation(); manager.allowsBackgroundLocationUpdates = false
+            errorMessage = TrackError.storage.localizedDescription; message = errorMessage!; notify()
+            throw TrackError.storage
+        }
+    }
+    func takeError() -> String? { defer { errorMessage = nil }; return errorMessage }
+    func foreground(_ isVisible: Bool) { visible = isVisible; configureLocation() }
+    func locate() {
+        guard CLLocationManager.locationServicesEnabled() else { message = "Геолокация выключена. Включи её в настройках iPhone."; notify(); return }
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .denied, .restricted: message = "Разреши Terra доступ к геопозиции в настройках."; notify()
+        default: configureLocation()
+        }
+    }
+    private func configureLocation() {
+        guard authorized, !blocked else { return }
+        manager.allowsBackgroundLocationUpdates = recording
+        manager.activityType = (state.active?.mode == .car || state.active?.mode == .moto) ? .automotiveNavigation : .fitness
+        if visible || recording { manager.startUpdatingLocation() } else { manager.stopUpdatingLocation() }
+    }
+    func begin(_ mode: TravelMode) {
+        guard !blocked, state.active == nil else { return }
+        pendingMode = mode; resumePending = false; message = "Ждём точный GPS для начала записи…"
+        locate(); fulfillPending(); notify()
+    }
+    func resume() {
+        guard !blocked, let session = state.active, session.pausedAt != nil else { return }
+        pendingMode = session.mode; resumePending = true
+        message = "Ждём точный GPS для продолжения…"; locate(); fulfillPending(); notify()
+    }
+    func cancelPending() { pendingMode = nil; resumePending = false; message = "Начало записи отменено"; notify() }
+    private func fulfillPending() {
+        guard let mode = pendingMode, authorized, let p = position,
+              abs(p.timestamp.timeIntervalSinceNow) < 20, p.horizontalAccuracy >= 0, p.horizontalAccuracy <= 60 else { return }
+        if resumePending, var session = state.active, let paused = session.pausedAt {
+            session.pausedMs += now-paused; session.pausedAt = nil; session.breakNext = true
+            session.lastRecordedAt = now; state.active = session
+        } else if state.active == nil {
+            let time = now
+            state.active = TrackSession(mode: mode, startedAt: time, points: [TrackPoint(lat: p.coordinate.latitude, lng: p.coordinate.longitude, t: time, accuracy: p.horizontalAccuracy)])
+        }
+        pendingMode = nil; resumePending = false
+        do { try persist(); configureLocation(); message = "Маршрут записывается" } catch { return }
+    }
+    func pause() {
+        cancelPending()
+        guard recording else { return }
+        state.active?.pausedAt = now; state.active?.lastRecordedAt = now
+        do { try persist(); message = "Запись на паузе" } catch { }
+        configureLocation(); notify()
+    }
+    func finish() {
+        guard var session = state.active else { return }
+        pendingMode = nil; resumePending = false
+        if let paused = session.pausedAt { session.pausedMs += now-paused }
+        session.endedAt = now; session.pausedAt = nil
+        state.sessions.append(session); state.active = nil
+        do { try persist(); message = "Маршрут сохранён" } catch { }
+        configureLocation(); notify()
+    }
+    func importData(_ data: Data) throws {
+        guard state.active == nil else { throw TrackError.activeSession }
+        guard data.count <= 25_000_000 else { throw TrackError.invalidBackup }
+        let backup = try JSONDecoder().decode(Backup.self, from: data); try backup.validate()
+        var ids = Set(state.sessions.map(\.id))
+        for session in backup.sessions where !ids.contains(session.id) { state.sessions.append(session); ids.insert(session.id) }
+        try persist(); message = "Маршруты восстановлены"; notify()
+    }
+    func exportURL() throws -> URL {
+        // Export current file unchanged when recovery is necessary, rather than destroying it.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Terra-backup.json")
+        if blocked { try Data(contentsOf: file).write(to: url, options: .atomic) }
+        else { try JSONEncoder().encode(Backup(sessions: state.sessions)).write(to: url, options: .atomic) }
+        return url
+    }
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        if authorized { message = "Определяем местоположение…"; configureLocation(); fulfillPending() }
+        else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+            if recording { pause() }
+            cancelPending(); message = "Нет доступа к геопозиции. Разреши его в настройках."; manager.stopUpdatingLocation()
+        }
+        notify()
+    }
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        for location in locations.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard CLLocationCoordinate2DIsValid(location.coordinate), abs(location.coordinate.latitude) <= 85,
+                  location.horizontalAccuracy >= 0, location.timestamp.timeIntervalSinceNow > -30,
+                  location.timestamp.timeIntervalSinceNow < 5 else { continue }
+            position = location; fulfillPending()
+            if recording, var session = state.active {
+                let p = TrackPoint(lat: location.coordinate.latitude, lng: location.coordinate.longitude,
+                                   t: location.timestamp.timeIntervalSince1970*1000, accuracy: location.horizontalAccuracy,
+                                   breakBefore: session.breakNext)
+                if p.t >= session.startedAt, p.accepts(after: session.points.last, mode: session.mode) {
+                    session.points.append(p); session.breakNext = false; session.lastRecordedAt = p.t; state.active = session
+                    do { try persist() } catch { break }
+                }
+            }
+            if pendingMode == nil { message = "GPS ±\(Int(location.horizontalAccuracy)) м" + (recording ? " · идёт запись" : "") }
+        }
+        notify()
+    }
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        message = "Нет сигнала GPS. Координаты продолжат поступать после восстановления сигнала."; notify()
+    }
+}

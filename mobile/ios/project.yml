@@ -1,0 +1,57 @@
+name: Terra
+options:
+  bundleIdPrefix: app.terra
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '2.0.0'
+    CURRENT_PROJECT_VERSION: '2'
+    CODE_SIGN_STYLE: Automatic
+targets:
+  Terra:
+    type: application
+    platform: iOS
+    sources: [Terra]
+    info:
+      path: Terra/Info.plist
+      properties:
+        CFBundleDisplayName: Terra
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: 'Геопозиция показывает тебя на карте. После нажатия «Начать» Terra сохраняет маршрут и открывает пройденные участки.'
+        NSLocationAlwaysAndWhenInUseUsageDescription: 'Начатый маршрут продолжает записываться при блокировке экрана. Заверши запись в Terra, чтобы остановить её.'
+        UIBackgroundModes: [location]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIRequiresFullScreen: true
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.terra.explore
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  TerraTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [TerraTests]
+    dependencies:
+      - target: Terra
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  TerraUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [TerraUITests]
+    dependencies:
+      - target: Terra
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Terra:
+    build:
+      targets:
+        Terra: all
+    test:
+      targets: [TerraTests, TerraUITests]
