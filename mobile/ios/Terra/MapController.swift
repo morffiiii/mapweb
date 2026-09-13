@@ -1,6 +1,6 @@
 import UIKit
 import MapKit
-import UniformTypeIdentifiers
+import PhotosUI
 
 final class Fog: NSObject, MKOverlay {
     let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
@@ -38,10 +38,20 @@ final class FogRenderer: MKOverlayRenderer {
             }
         }
         context.endTransparencyLayer(); context.restoreGState()
+        context.saveGState(); context.clip(to: rect(for: mapRect)); context.setLineCap(.round)
+        for s in fog.sessions {
+            context.setStrokeColor(s.mode.color.cgColor); context.setFillColor(s.mode.color.cgColor); context.setLineWidth(3/zoomScale)
+            for (i,p) in s.points.enumerated() {
+                let b = point(for: MKMapPoint(p.coordinate))
+                if i > 0, s.points[i-1].connects(to: p), abs(s.points[i-1].lng-p.lng) < 180 {
+                    context.beginPath(); context.move(to: point(for: MKMapPoint(s.points[i-1].coordinate))); context.addLine(to: b); context.strokePath()
+                } else { context.fillEllipse(in: CGRect(x: b.x-2/zoomScale, y: b.y-2/zoomScale, width: 4/zoomScale, height: 4/zoomScale)) }
+            }
+        }; context.restoreGState()
     }
 }
 
-final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPickerDelegate {
+final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewControllerDelegate {
     private let map = MKMapView()
     private let engine = TrackingEngine.shared
     private let status = UILabel(), metric = UILabel(), start = UIButton(type: .system), finish = UIButton(type: .system)
@@ -49,6 +59,8 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
     private let accent = UIColor(red: 1, green: 0.36, blue: 0.12, alpha: 1)
     private var layer: TravelMode?, centered = false, fog: Fog?, signature = "", timer: Timer?
     private weak var bottomPanel: UIView?
+    private var following = false, wasRecording = false, replayTimer: Timer?, replaySessions: [TrackSession]?
+    private var photoHandler: ((UIImage) -> Void)?
     private var selectedMode: TravelMode { TravelMode.allCases[max(0, modes.selectedSegmentIndex)] }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -58,6 +70,9 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         NSLayoutConstraint.activate([map.topAnchor.constraint(equalTo: view.topAnchor), map.bottomAnchor.constraint(equalTo: view.bottomAnchor), map.leadingAnchor.constraint(equalTo: view.leadingAnchor), map.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
         map.delegate = self; map.showsUserLocation = true; map.pointOfInterestFilter = .excludingAll
         map.accessibilityIdentifier = "nativeMap"
+        map.isAccessibilityElement = true; map.accessibilityLabel = "Карта открытий"; map.accessibilityTraits = .allowsDirectInteraction
+        map.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(markPlace(_:))))
+        for place in PersonalStore.shared.data.places { let pin = MKPointAnnotation(); pin.coordinate = CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng); pin.title = place.note; map.addAnnotation(pin) }
         let top = UIStackView(); top.axis = .horizontal; top.distribution = .equalSpacing
         let title = UILabel(); title.text = "TERRA ↗"; title.font = .systemFont(ofSize: 27, weight: .black)
         top.addArrangedSubview(title)
@@ -65,6 +80,7 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         place(top, top: true)
         let panel = UIStackView(); panel.axis = .vertical; panel.spacing = 14
         status.font = .systemFont(ofSize: 12, weight: .medium); status.textColor = .secondaryLabel; status.numberOfLines = 2
+        status.accessibilityIdentifier = "gpsStatus"
         metric.font = .monospacedDigitSystemFont(ofSize: 27, weight: .semibold)
         metric.accessibilityIdentifier = "sessionMetrics"
         modes.selectedSegmentIndex = 0; modes.accessibilityIdentifier = "travelModes"
@@ -77,6 +93,7 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         let nav = UIStackView(); nav.distribution = .equalSpacing
         nav.addArrangedSubview(button("История", "clock", #selector(history)))
         nav.addArrangedSubview(button("Где я", "location.fill", #selector(locate)))
+        nav.addArrangedSubview(button("Профиль", "person.crop.circle", #selector(profile)))
         nav.addArrangedSubview(button("Настройки", "slider.horizontal.3", #selector(settings)))
         panel.addArrangedSubview(nav); place(panel, top: false)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: TrackingEngine.changed, object: nil)
@@ -84,9 +101,9 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         refresh()
     }
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); engine.locate() }
-    deinit { timer?.invalidate(); NotificationCenter.default.removeObserver(self) }
+    deinit { timer?.invalidate(); replayTimer?.invalidate(); NotificationCenter.default.removeObserver(self) }
     private func button(_ title: String, _ icon: String, _ action: Selector) -> UIButton {
-        let b = UIButton(type: .system); var c = UIButton.Configuration.plain(); c.title = title; c.image = UIImage(systemName: icon); c.imagePadding = 6; b.configuration = c; b.addTarget(self, action: action, for: .touchUpInside); return b
+        let b = UIButton(type: .system); var c = UIButton.Configuration.plain(); c.image = UIImage(systemName: icon); c.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium); c.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12); b.configuration = c; b.accessibilityLabel = title; b.accessibilityIdentifier = title; b.addTarget(self, action: action, for: .touchUpInside); return b
     }
     private func place(_ stack: UIStackView, top: Bool) {
         let bg = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial)); bg.layer.cornerRadius = 24; bg.clipsToBounds = true
@@ -109,8 +126,11 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) { super.traitCollectionDidChange(previousTraitCollection); signature = ""; if isViewLoaded { refresh() } }
     @objc private func refresh() {
         refreshMetrics()
+        if engine.recording && !wasRecording { following = true }
+        wasRecording = engine.recording
         if !centered, let p = engine.position { centered = true; map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true) }
-        let sessions = (engine.state.sessions + [engine.state.active].compactMap { $0 }).filter { layer == nil || $0.mode == layer }
+        if following, engine.recording, let p = engine.position, replaySessions == nil { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }
+        let sessions = (replaySessions ?? (engine.state.sessions + [engine.state.active].compactMap { $0 })).filter { layer == nil || $0.mode.category == layer }
         let key = "\(layer?.rawValue ?? "all"):\(sessions.map { "\($0.id):\($0.points.count)" }.joined(separator: ",")):\(traitCollection.userInterfaceStyle.rawValue)"
         if signature != key {
             signature = key
@@ -124,7 +144,7 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         modes.isEnabled = engine.state.active == nil && engine.pendingMode == nil
         if let s = engine.state.active {
             let seconds = Int(s.duration()); metric.text = String(format: "%.2f км   %02d:%02d", s.distance/1000, seconds/60, seconds%60)
-            modes.selectedSegmentIndex = TravelMode.allCases.firstIndex(of: s.mode) ?? 0
+            modes.selectedSegmentIndex = TravelMode.allCases.firstIndex(of: s.mode.category) ?? 0
         } else { metric.text = "Твой мир. Твой путь." }
         start.setTitle(engine.pendingMode != nil ? "Отменить ожидание" : engine.state.active == nil ? "Начать прогулку ↗" : engine.recording ? "Пауза" : "Продолжить", for: .normal)
         start.isEnabled = !engine.blocked; finish.isHidden = engine.state.active == nil
@@ -135,70 +155,186 @@ final class MapController: UIViewController, MKMapViewDelegate, UIDocumentPicker
         else if engine.state.active != nil { engine.resume() }
         else { engine.begin(selectedMode) }
     }
-    @objc private func endRecording() { engine.finish() }
-    @objc private func locate() { engine.locate(); map.setUserTrackingMode(.follow, animated: true); if !engine.authorized { settingsPermission() } }
+    @objc private func endRecording() { let session = engine.state.active; engine.finish(); if engine.state.active == nil, let session { replay(session) } }
+    @objc private func locate() { following = true; engine.locate(); if let p = engine.position { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }; if !engine.authorized { settingsPermission() } }
+
+    @discardableResult private func page(_ title: String) -> TerraPage {
+        let p = TerraPage(title); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self)
+        p.view.alpha = 0; UIView.animate(withDuration: 0.22) { p.view.alpha = 1 }; return p
+    }
     private func settingsPermission() {
-        let a = UIAlertController(title: "Геопозиция", message: "В настройках Terra включи доступ к геопозиции и точную геопозицию.", preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "Настройки iPhone", style: .default) { _ in if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }); a.addAction(UIAlertAction(title: "Закрыть", style: .cancel)); present(a, animated: true)
-    }
-    private func sheet(_ title: String) -> UIAlertController { UIAlertController(title: title, message: nil, preferredStyle: .actionSheet) }
-    private func show(_ a: UIAlertController) { a.addAction(UIAlertAction(title: "Закрыть", style: .cancel)); a.popoverPresentationController?.sourceView = view; a.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1); present(a, animated: true) }
-    @objc private func layers() {
-        let a = sheet("Открытые территории")
-        a.addAction(UIAlertAction(title: "Все способы", style: .default) { _ in self.layer = nil; self.refresh() })
-        for m in TravelMode.allCases { a.addAction(UIAlertAction(title: m.title, style: .default) { _ in self.layer = m; self.refresh() }) }; show(a)
-    }
-    @objc private func history() {
-        let controller = HistoryController(sessions: engine.state.sessions) { [weak self] s in
-            guard let self, let first = s.points.first else { return }
-            self.layer = s.mode; self.refresh()
-            var bounds = MKMapRect(origin: MKMapPoint(first.coordinate), size: MKMapSize(width: 1, height: 1))
-            for p in s.points { bounds = bounds.union(MKMapRect(origin: MKMapPoint(p.coordinate), size: MKMapSize(width: 1, height: 1))) }
-            self.map.setVisibleMapRect(bounds, edgePadding: UIEdgeInsets(top: 140, left: 50, bottom: 340, right: 50), animated: true)
-        }
-        present(UINavigationController(rootViewController: controller), animated: true)
+        let p = page("Геопозиция")
+        p.text("Для записи нужна точная геопозиция. Включи её в настройках Terra на iPhone.")
+        p.action("Открыть настройки", icon: "location") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
     }
     @objc private func settings() {
-        let a = sheet("Terra · 2.0")
-        for (name,value) in [("Тема системы",0),("Светлая тема",1),("Тёмная тема",2)] { a.addAction(UIAlertAction(title: name, style: .default) { _ in UserDefaults.standard.set(value, forKey: "nativeTheme"); self.applyTheme(); self.refresh() }) }
-        a.addAction(UIAlertAction(title: "Разрешения геопозиции", style: .default) { _ in self.settingsPermission() })
-        a.addAction(UIAlertAction(title: "Экспорт маршрутов", style: .default) { _ in
-            do { let c = UIActivityViewController(activityItems: [try self.engine.exportURL()], applicationActivities: nil); c.popoverPresentationController?.sourceView = self.view; self.present(c, animated: true) } catch { self.alert("Экспорт", error.localizedDescription) }
-        })
-        a.addAction(UIAlertAction(title: "Импорт маршрутов", style: .default) { _ in let p = UIDocumentPickerViewController(forOpeningContentTypes: [.json]); p.delegate = self; self.present(p, animated: true) })
-        a.addAction(UIAlertAction(title: "О записи в фоне", style: .default) { _ in self.alert("Запись маршрута", "Нажми «Начать прогулку» и дождись GPS. После этого можно заблокировать экран. Не закрывай Terra смахиванием из списка приложений: iOS остановит запись. Радиус открытия — 35 м. Маршруты хранятся на этом телефоне; сохраняй резервную копию перед переустановкой.") }); show(a)
+        let p = page("Настройки")
+        p.text("Внешний вид")
+        for (name,value,icon) in [("Как на телефоне",0,"circle.lefthalf.filled"),("Светлая",1,"sun.max"),("Тёмная",2,"moon")] {
+            p.action(name, detail: UserDefaults.standard.integer(forKey: "nativeTheme") == value ? "Выбрана" : "", icon: icon) { [weak self, weak p] in
+                UserDefaults.standard.set(value, forKey: "nativeTheme"); self?.applyTheme(); self?.refresh(); p?.close()
+            }
+        }
+        p.text("Маршрут начинает записываться сразу. Если GPS ещё уточняется, первые точные координаты добавятся автоматически. Не закрывай Terra смахиванием во время записи.")
+        p.action("Геопозиция", icon: "location.fill") { [weak self] in self?.settingsPermission() }
+        p.text("Карта: Apple Maps. Подключение Яндекс Карт требует ключа MapKit.\nTerra · 2.1\nМаршруты и личные места хранятся на этом телефоне.")
     }
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }; let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-        do { try engine.importData(Data(contentsOf: url)) } catch { alert("Импорт", error.localizedDescription) }
+    @objc private func layers() {
+        let p = page("Слои")
+        p.text("Каждый способ — своя история. В общем слое маршруты различаются цветом.")
+        p.action("Все способы", detail: layer == nil ? "Выбран общий слой" : "Показать всё", icon: "square.3.layers.3d") { [weak self, weak p] in self?.layer = nil; self?.refresh(); p?.close() }
+        for mode in TravelMode.allCases { p.action(mode.title, detail: layer == mode ? "Выбран" : "", icon: mode.symbol, color: mode.color) { [weak self, weak p] in self?.layer = mode; self?.refresh(); p?.close() } }
     }
-    private func alert(_ title: String, _ message: String) { let a = UIAlertController(title: title, message: message, preferredStyle: .alert); a.addAction(UIAlertAction(title: "Понятно", style: .default)); present(a, animated: true) }
-    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer { let r = FogRenderer(overlay: overlay); r.dark = traitCollection.userInterfaceStyle == .dark; return r }
-    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) { mapView.accessibilityValue = String(format: "%.5f, %.5f", mapView.centerCoordinate.latitude, mapView.centerCoordinate.longitude) }
-}
-
-final class HistoryController: UITableViewController {
-    let sessions: [TrackSession], select: (TrackSession) -> Void
-    init(sessions: [TrackSession], select: @escaping (TrackSession) -> Void) { self.sessions = sessions.reversed(); self.select = select; super.init(style: .insetGrouped) }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func viewDidLoad() {
-        super.viewDidLoad(); title = "История"; navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(close))
-        if sessions.isEmpty { let l = UILabel(); l.text = "Здесь появятся твои прогулки"; l.textAlignment = .center; tableView.backgroundView = l }
-        let summary = UILabel(frame: CGRect(x: 20, y: 0, width: 300, height: 90)); summary.numberOfLines = 3; summary.textAlignment = .center; summary.font = .systemFont(ofSize: 16, weight: .medium)
-        let distance = sessions.reduce(0) { $0+$1.distance }/1000
-        summary.text = "\(sessions.count) маршрутов · \(String(format: "%.2f", distance)) км\nСчитаем открытые территории…"; tableView.tableHeaderView = summary
-        let snapshot = sessions
-        DispatchQueue.global(qos: .userInitiated).async {
-            let area = Double(Discovery.cells(snapshot).count)*400/1_000_000
-            DispatchQueue.main.async { summary.text = "\(snapshot.count) маршрутов · \(String(format: "%.2f", distance)) км\n≈ \(String(format: "%.3f", area)) км² открыто" }
+    @objc private func history() {
+        let p = page("История")
+        if engine.state.sessions.isEmpty { p.text("Первый маршрут ещё впереди.", large: true); p.text("Начни прогулку — здесь останутся её путь, время и открытые места.") }
+        for s in engine.state.sessions.reversed() {
+            let date = Date(timeIntervalSince1970: s.startedAt/1000).formatted(date: .abbreviated, time: .shortened)
+            p.action("\(s.mode.title) · \(String(format: "%.2f", s.distance/1000)) км", detail: "\(date) · \(Int(s.duration()/60)) мин · Смотреть повтор", icon: "play.circle", color: s.mode.color) { [weak self, weak p] in p?.close(); self?.replay(s) }
         }
     }
-    @objc private func close() { dismiss(animated: true) }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sessions.count }
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let s = sessions[indexPath.row], c = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        c.textLabel?.text = "\(s.mode.title) · \(String(format: "%.2f", s.distance/1000)) км"
-        c.detailTextLabel?.text = Date(timeIntervalSince1970: s.startedAt/1000).formatted(date: .abbreviated, time: .shortened) + " · \(Int(s.duration()/60)) мин"; c.imageView?.image = UIImage(systemName: s.mode.symbol); c.accessoryType = .disclosureIndicator; return c
+    @objc private func profile() {
+        let p = page("Твой профиль"), personal = PersonalStore.shared
+        let name = UITextField(); name.text = personal.data.name; name.font = .systemFont(ofSize: 28, weight: .bold); name.placeholder = "Твоё имя"; name.autocorrectionType = .no
+        p.content.addArrangedSubview(name)
+        p.action("Сохранить имя", icon: "checkmark") { [weak self, weak name] in do { try personal.update { $0.name = String((name?.text ?? "Исследователь").prefix(60)) }; name?.resignFirstResponder() } catch { self?.alert("Профиль", error.localizedDescription) } }
+        let sessions = engine.state.sessions, km = sessions.reduce(0) { $0+$1.distance }/1000
+        p.text(String(format: "%.2f км", km), large: true)
+        let week = Date().timeIntervalSince1970*1000-7*86400000
+        p.text("\(sessions.count) маршрутов · \(sessions.filter { $0.startedAt >= week }.count) за последние 7 дней\n\(Int(sessions.reduce(0) { $0+$1.duration() }/60)) минут в движении")
+        let streak = WalkingStreak.status(walked: WalkingStreak.days(sessions), restores: personal.data.restores ?? [])
+        p.text("🔥 \(streak.count) дней подряд", large: true)
+        p.text((streak.walkedToday ? "Сегодня прогулка засчитана." : "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: \(streak.remaining) из 3.")
+        if streak.canRestore { p.action("Восстановить серию", detail: "Закрыть вчерашний пропуск · 1 восстановление", icon: "flame.fill") { [weak self, weak p] in
+            let current = WalkingStreak.status(walked: WalkingStreak.days(self?.engine.state.sessions ?? []), restores: personal.data.restores ?? [])
+            guard current.canRestore else { return }
+            do { try personal.update { if $0.restores == nil { $0.restores = [] }; $0.restores?.append(StreakRestore(day: current.yesterday, usedOn: current.today)) }; p?.close(); self?.profile() } catch { self?.alert("Серия", error.localizedDescription) }
+        } }
+        let area = p.text("Считаем открытые территории…", large: true)
+        let territoryLabel = p.text(personal.data.territory == nil ? "Выбери свою территорию: круг радиусом 500 м вокруг текущего места. Это личная цель, а не административная граница района." : "Считаем прогресс своей территории…")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let cells = Discovery.cells(sessions)
+            DispatchQueue.main.async { area.text = String(format: "≈ %.3f км² открыто", Double(cells.count)*0.0004)
+                if let t = personal.data.territory { territoryLabel.text = String(format: "Моя территория · %.1f%%\nКруг 500 м вокруг выбранной точки", Explore.coverage(t, cells: cells)) }
+            }
+        }
+        p.action("Исследовать этот квартал", detail: "Задать территорию вокруг меня · 500 м", icon: "scope") { [weak self, weak p] in
+            guard let self, let pos = self.engine.position else { self?.alert("Геопозиция", "Сначала дождись координат GPS."); return }
+            do { try personal.update { $0.territory = Territory(lat: pos.coordinate.latitude, lng: pos.coordinate.longitude) }; p?.close(); self.profile() } catch { self.alert("Сохранение", error.localizedDescription) }
+        }
+        for m in TravelMode.allCases { let routes = sessions.filter { $0.mode.category == m }; p.action(m.title, detail: String(format: "%.2f км · %d маршрутов", routes.reduce(0) { $0+$1.distance }/1000, routes.count), icon: m.symbol, color: m.color) { [weak self, weak p] in self?.layer = m; self?.refresh(); p?.close() } }
+        p.action("Неизведанное рядом", detail: "Найти ещё не открытые участки", icon: "sparkle.magnifyingglass") { [weak self] in self?.nearby() }
+        p.action("Мои места", detail: "\(personal.data.places.count) заметок · удерживай карту, чтобы добавить", icon: "mappin.and.ellipse") { [weak self] in self?.places() }
+        p.action("Мои цели", detail: "Расстояние, маршруты, открытая площадь", icon: "target") { [weak self] in self?.goals() }
+        p.action("Достижения", detail: "Твои открытия в цифрах и наградах", icon: "medal") { [weak self] in self?.achievements() }
     }
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { let s = sessions[indexPath.row]; dismiss(animated: true) { self.select(s) } }
+    private func goals() {
+        let p = page("Мои цели"), store = PersonalStore.shared, sessions = engine.state.sessions
+        p.text("Задавай свои ориентиры. Прогресс учитывает все завершённые маршруты.")
+        let name = UITextField(); name.placeholder = "Например, исследовать город"; name.borderStyle = .roundedRect; p.content.addArrangedSubview(name)
+        let kind = UISegmentedControl(items: ["Километры", "Маршруты", "км²"]); kind.selectedSegmentIndex = 0; p.content.addArrangedSubview(kind)
+        let target = UITextField(); target.placeholder = "Цель, например 10"; target.keyboardType = .decimalPad; target.borderStyle = .roundedRect; p.content.addArrangedSubview(target)
+        p.action("Добавить цель", icon: "plus") { [weak self, weak p, weak name, weak target, weak kind] in
+            guard let value = Double((target?.text ?? "").replacingOccurrences(of: ",", with: ".")), value.isFinite, value > 0, value <= 1_000_000 else { self?.alert("Цель", "Введи положительное число до 1 000 000."); return }
+            let goal = PersonalGoal(title: String((name?.text?.isEmpty == false ? name!.text! : "Моя цель").prefix(80)), kind: ["km","routes","area"][kind?.selectedSegmentIndex ?? 0], target: value)
+            do { try store.update { if $0.goals == nil { $0.goals = [] }; $0.goals?.append(goal) }; p?.close(); self?.goals() } catch { self?.alert("Цель", error.localizedDescription) }
+        }
+        let goals = store.data.goals ?? []
+        DispatchQueue.global(qos: .userInitiated).async {
+            let km = sessions.reduce(0) { $0+$1.distance }/1000, area = Double(Discovery.cells(sessions).count)*0.0004
+            DispatchQueue.main.async { [weak self, weak p] in guard let p else { return }
+                for goal in goals {
+                    let value = goal.kind == "km" ? km : goal.kind == "routes" ? Double(sessions.count) : area
+                    let unit = goal.kind == "km" ? "км" : goal.kind == "routes" ? "маршрутов" : "км²"
+                    p.text(goal.title, large: true); p.text(String(format: "%.2f / %.2f %@ · %.0f%%", value, goal.target, unit, min(100,value/goal.target*100)))
+                    let bar = UIProgressView(progressViewStyle: .default); bar.progressTintColor = self?.accent; bar.progress = Float(min(1,value/goal.target)); p.content.addArrangedSubview(bar)
+                    p.action(value >= goal.target ? "Достигнуто · убрать цель" : "Убрать цель", icon: value >= goal.target ? "checkmark.seal" : "minus.circle") { [weak self, weak p] in do { try store.update { $0.goals?.removeAll { $0.id == goal.id } }; p?.close(); self?.goals() } catch { self?.alert("Цель", error.localizedDescription) } }
+                }
+            }
+        }
+    }
+    private func achievements() {
+        let p = page("Достижения"), sessions = engine.state.sessions
+        p.text("Открываются по твоим настоящим маршрутам. Каждый шаг остаётся частью истории.")
+        let days = Set(sessions.map { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0.startedAt/1000)) }).sorted()
+        var longest = 0, streak = 0, previous: Date?
+        for day in days { streak = previous.flatMap { Calendar.current.dateComponents([.day], from: $0, to: day).day } == 1 ? streak+1 : 1; longest = max(longest,streak); previous = day }
+        let walkKm = sessions.filter { $0.mode.category == .walk }.reduce(0) { $0+$1.distance }/1000
+        let awards: [(String,String,Bool)] = [
+            ("Первый след","Заверши маршрут с координатами",sessions.contains { !$0.points.isEmpty }),
+            ("Пешком интереснее","Пройди 10 км пешком",walkKm >= 10),
+            ("Исследователь","Заверши 10 маршрутов",sessions.count >= 10),
+            ("Неделя открытий","7 дней подряд с маршрутами",longest >= 7),
+            ("Коллекционер мест","Сохрани 5 личных мест",PersonalStore.shared.data.places.count >= 5),
+            ("Разными путями","Маршруты тремя способами",Set(sessions.filter { !$0.points.isEmpty }.map { $0.mode.category }).count >= 3)]
+        for (title,detail,earned) in awards { p.action(title, detail: (earned ? "Получено · " : "Ещё впереди · ")+detail, icon: earned ? "medal.fill" : "lock", color: earned ? accent : .secondaryLabel) {} }
+    }
+    private func nearby() {
+        guard let pos = engine.position else { alert("Геопозиция", "Для поиска нужны текущие координаты."); return }
+        let p = page("Рядом с тобой"); p.text("Неоткрытые участки, расстояние по прямой. Доступность прохода проверяй на месте.")
+        let sessions = engine.state.sessions+[engine.state.active].compactMap { $0 }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let found = Explore.nearby(pos.coordinate, cells: Discovery.cells(sessions))
+            DispatchQueue.main.async { [weak self, weak p] in
+                guard let self, let p else { return }
+                if found.isEmpty { p.text("Рядом всё исследовано. Попробуй поиск из другого места.") }
+                for point in found { let meters = CLLocation(latitude: point.lat, longitude: point.lng).distance(from: pos)
+                    p.action("Неоткрытый участок", detail: "\(Int(meters)) м от тебя", icon: "arrow.up.right") { [weak self, weak p] in
+                        self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: point.coordinate, latitudinalMeters: 700, longitudinalMeters: 700), animated: true)
+                        let pin = MKPointAnnotation(); pin.coordinate = point.coordinate; pin.title = "Неоткрытый участок"; self?.map.addAnnotation(pin); p?.close()
+                    }
+                }
+            }
+        }
+    }
+    private func replay(_ session: TrackSession) {
+        guard !session.points.isEmpty else { return }
+        replayTimer?.invalidate(); following = false; layer = nil
+        let base = engine.state.sessions.filter { $0.id != session.id }
+        var bounds = MKMapRect.null; session.points.forEach { bounds = bounds.union(MKMapRect(origin: MKMapPoint($0.coordinate), size: MKMapSize(width: 1, height: 1))) }
+        map.setVisibleMapRect(bounds, edgePadding: UIEdgeInsets(top: 140, left: 60, bottom: 340, right: 60), animated: true)
+        var frame = 0
+        replayTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }; frame += 1
+            var partial = session; partial.points = Array(session.points.prefix(max(1, session.points.count*frame/75)))
+            self.replaySessions = base+[partial]; self.signature = ""; self.refresh(); self.status.text = "Повтор маршрута · \(min(100, frame*100/75))%"
+            if frame >= 75 { timer.invalidate(); self.replaySessions = nil; self.signature = ""; self.refresh() }
+        }
+    }
+    @objc private func markPlace(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }; let coordinate = map.convert(gesture.location(in: map), toCoordinateFrom: map)
+        let p = page("Новое место"), text = UITextView(); text.font = .systemFont(ofSize: 18); text.backgroundColor = .secondarySystemBackground; text.layer.cornerRadius = 16; text.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        p.text("Что хочется запомнить здесь?"); p.content.addArrangedSubview(text)
+        let preview = UIImageView(); preview.contentMode = .scaleAspectFit; preview.heightAnchor.constraint(equalToConstant: 180).isActive = true; preview.isHidden = true; p.content.addArrangedSubview(preview)
+        var photo: UIImage?
+        p.action("Добавить фото", icon: "photo") { [weak self, weak preview] in
+            var config = PHPickerConfiguration(); config.filter = .images; config.selectionLimit = 1
+            let picker = PHPickerViewController(configuration: config); picker.delegate = self
+            self?.photoHandler = { image in photo = image; preview?.image = image; preview?.isHidden = false }; self?.present(picker, animated: true)
+        }
+        p.action("Сохранить место", icon: "mappin") { [weak self, weak p, weak text] in
+            let store = PersonalStore.shared; var place = Place(lat: coordinate.latitude, lng: coordinate.longitude, note: String((text?.text ?? "Моё место").prefix(2000)))
+            do {
+                if let photo { let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: max(1,1200*photo.size.height/photo.size.width))); let resized = renderer.image { _ in photo.draw(in: CGRect(x: 0, y: 0, width: 1200, height: max(1,1200*photo.size.height/photo.size.width))) }; if let bytes = resized.jpegData(compressionQuality: 0.8) { try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true); place.photo = "place-\(place.id).jpg"; try bytes.write(to: store.directory.appendingPathComponent(place.photo!), options: .atomic) } }
+                try store.update { $0.places.append(place) }; let pin = MKPointAnnotation(); pin.coordinate = coordinate; pin.title = place.note; self?.map.addAnnotation(pin); p?.close()
+            } catch { self?.alert("Место", error.localizedDescription) }
+        }
+    }
+    private func places() {
+        let p = page("Мои места")
+        if PersonalStore.shared.data.places.isEmpty { p.text("Удерживай точку на карте, чтобы оставить заметку или фото.") }
+        for place in PersonalStore.shared.data.places {
+            if let path = place.photo, let image = UIImage(contentsOfFile: PersonalStore.shared.directory.appendingPathComponent(path).path) { let v = UIImageView(image: image); v.contentMode = .scaleAspectFill; v.clipsToBounds = true; v.layer.cornerRadius = 20; v.heightAnchor.constraint(equalToConstant: 170).isActive = true; p.content.addArrangedSubview(v) }
+            p.action(place.note.isEmpty ? "Моё место" : place.note, icon: "mappin") { [weak self, weak p] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng), latitudinalMeters: 700, longitudinalMeters: 700), animated: true); p?.close() }
+        }
+    }
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true); guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { photoHandler = nil; return }
+        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in DispatchQueue.main.async { if let image = object as? UIImage { self?.photoHandler?(image) }; self?.photoHandler = nil } }
+    }
+    private func alert(_ title: String, _ message: String) { page(title).text(message) }
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer { let r = FogRenderer(overlay: overlay); r.dark = traitCollection.userInterfaceStyle == .dark; return r }
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) { mapView.accessibilityValue = String(format: "%.5f, %.5f", mapView.centerCoordinate.latitude, mapView.centerCoordinate.longitude) }
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) { if mapView.subviews.flatMap({ $0.gestureRecognizers ?? [] }).contains(where: { $0.state == .began || $0.state == .changed }) { following = false } }
+
 }

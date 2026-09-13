@@ -3,7 +3,9 @@ import CoreLocation
 
 enum TravelMode: String, Codable, CaseIterable {
     case walk, bike, car, moto, other
-    var title: String { switch self { case .walk: return "Пешком"; case .bike: return "Вело"; case .car: return "Авто"; case .moto: return "Мото"; case .other: return "Другое" } }
+    static var allCases: [TravelMode] { [.walk, .car, .bike, .other] }
+    var category: TravelMode { self == .moto ? .other : self }
+    var title: String { switch self { case .walk: return "Пешком"; case .bike: return "Вело"; case .car: return "Авто"; case .moto, .other: return "Другое" } }
     var symbol: String { switch self { case .walk: return "figure.walk"; case .bike: return "bicycle"; case .car: return "car"; case .moto: return "scooter"; case .other: return "tram" } }
     var maxSpeed: Double { switch self { case .walk: return 12; case .bike: return 35; case .car, .moto: return 90; case .other: return 100 } }
 }

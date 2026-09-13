@@ -4,7 +4,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.*
 
-enum class Mode(val title: String, val speed: Double) { walk("Пешком",12.0), bike("Вело",35.0), car("Авто",90.0), moto("Мото",90.0), other("Другое",100.0) }
+enum class Mode(val title: String, val speed: Double) {
+    walk("Пешком",12.0), bike("Вело",35.0), car("Авто",90.0), moto("Другое",90.0), other("Другое",100.0);
+    val category: Mode get() = if(this==moto) other else this
+    val color: Int get() = when(category) { walk -> 0xFFFF5C1F.toInt(); bike -> 0xFF19C9DE.toInt(); car -> 0xFFAA79FF.toInt(); else -> 0xFFFF5798.toInt() }
+    companion object { val visible=listOf(walk,car,bike,other) }
+}
 data class Point(val lat: Double, val lng: Double, val t: Long, val accuracy: Double, val gap: Boolean = false) {
     fun valid() = lat.isFinite() && lng.isFinite() && accuracy.isFinite() && abs(lat)<=85 && abs(lng)<=180 && accuracy in 0.0..60.0
     fun distance(p: Point): Double {

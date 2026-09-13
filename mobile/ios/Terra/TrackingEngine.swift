@@ -23,7 +23,7 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 4
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.pausesLocationUpdatesAutomatically = false
         manager.showsBackgroundLocationIndicator = true
         do {
@@ -61,7 +61,6 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
     func takeError() -> String? { defer { errorMessage = nil }; return errorMessage }
     func foreground(_ isVisible: Bool) { visible = isVisible; configureLocation() }
     func locate() {
-        guard CLLocationManager.locationServicesEnabled() else { message = "Геолокация выключена. Включи её в настройках iPhone."; notify(); return }
         switch manager.authorizationStatus {
         case .notDetermined: manager.requestWhenInUseAuthorization()
         case .denied, .restricted: message = "Разреши Terra доступ к геопозиции в настройках."; notify()
@@ -71,6 +70,7 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
     private func configureLocation() {
         guard authorized, !blocked else { return }
         manager.allowsBackgroundLocationUpdates = recording
+        manager.distanceFilter = recording && state.active?.points.isEmpty == false ? 4 : kCLDistanceFilterNone
         manager.activityType = (state.active?.mode == .car || state.active?.mode == .moto) ? .automotiveNavigation : .fitness
         if visible || recording { manager.startUpdatingLocation() } else { manager.stopUpdatingLocation() }
     }
@@ -86,17 +86,20 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
     }
     func cancelPending() { pendingMode = nil; resumePending = false; message = "Начало записи отменено"; notify() }
     private func fulfillPending() {
-        guard let mode = pendingMode, authorized, let p = position,
-              abs(p.timestamp.timeIntervalSinceNow) < 20, p.horizontalAccuracy >= 0, p.horizontalAccuracy <= 60 else { return }
+        guard let mode = pendingMode, authorized else { return }
         if resumePending, var session = state.active, let paused = session.pausedAt {
             session.pausedMs += now-paused; session.pausedAt = nil; session.breakNext = true
             session.lastRecordedAt = now; state.active = session
         } else if state.active == nil {
             let time = now
-            state.active = TrackSession(mode: mode, startedAt: time, points: [TrackPoint(lat: p.coordinate.latitude, lng: p.coordinate.longitude, t: time, accuracy: p.horizontalAccuracy)])
+            var points: [TrackPoint] = []
+            if let p = position, abs(p.timestamp.timeIntervalSinceNow) < 20, p.horizontalAccuracy >= 0, p.horizontalAccuracy <= 60 {
+                points = [TrackPoint(lat: p.coordinate.latitude, lng: p.coordinate.longitude, t: time, accuracy: p.horizontalAccuracy)]
+            }
+            state.active = TrackSession(mode: mode, startedAt: time, points: points)
         }
         pendingMode = nil; resumePending = false
-        do { try persist(); configureLocation(); message = "Маршрут записывается" } catch { return }
+        do { try persist(); configureLocation(); message = state.active?.points.isEmpty == true ? "Запись начата · уточняем GPS…" : "Маршрут записывается" } catch { return }
     }
     func pause() {
         cancelPending()

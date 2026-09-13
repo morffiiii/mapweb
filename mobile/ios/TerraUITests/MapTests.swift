@@ -7,8 +7,12 @@ final class MapTests: XCTestCase {
             return false
         }
         app.launch(); app.tap()
-        XCTAssertTrue(app.maps.firstMatch.waitForExistence(timeout: 15))
-        let nativeMap = app.maps.firstMatch
+        continueAfterFailure = false
+        let nativeMap = app.descendants(matching: .any).matching(identifier: "nativeMap").firstMatch
+        XCTAssertTrue(nativeMap.waitForExistence(timeout: 15))
+        let gps = app.staticTexts["gpsStatus"]
+        expectation(for: NSPredicate(format: "label BEGINSWITH 'GPS'"), evaluatedWith: gps)
+        waitForExpectations(timeout: 30)
         let initial = nativeMap.value as? String
         nativeMap.swipeLeft()
         let moved = NSPredicate { _,_ in (nativeMap.value as? String) != initial }
@@ -23,7 +27,7 @@ final class MapTests: XCTestCase {
         app.buttons["Завершить"].tap()
         app.terminate(); app.launch()
         app.buttons["История"].tap()
-        XCTAssertTrue(app.tables.cells.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'км'")).firstMatch.waitForExistence(timeout: 10))
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "Native map"; shot.lifetime = .keepAlways; add(shot)
     }
 }

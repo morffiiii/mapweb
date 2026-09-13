@@ -22,9 +22,14 @@ class TrackingService: Service(), LocationListener {
         val mode=runCatching { Mode.valueOf(intent?.getStringExtra("mode") ?: "walk") }.getOrDefault(Mode.walk)
         store.pending=store.active?.mode ?: mode; store.message="Ждём точный GPS для записи…"
         startForeground(1,notification())
-        try { location.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,4f,this); if(location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) location.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,2000,4f,this) }
+        val now=System.currentTimeMillis()
+        if(store.active==null) store.active=Session(mode=mode,startedAt=now)
+        else store.active?.let { s -> s.pausedAt?.let { s.pausedMs+=now-it }; s.pausedAt=null; s.breakNext=true }
+        store.pending=null; store.message="Запись начата · уточняем GPS…"
+        if(!store.save()) { stopSelf(); return START_NOT_STICKY }
+        try { location.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,0f,this); if(location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) location.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,2000,0f,this) }
         catch(e: Exception) { store.message="Включи геолокацию и разреши доступ Terra"; store.pending=null; stopSelf() }
-        store.position?.let { if(System.currentTimeMillis()-it.t in 0..20000) accept(it) }
+        store.position?.let { if(System.currentTimeMillis()-it.t in 0..20000) accept(it.copy(t=now)) }
         store.notifyChanged(); return START_NOT_STICKY
     }
     private fun notification(): Notification {

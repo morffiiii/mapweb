@@ -25,7 +25,10 @@ jobs:
           xcrun simctl boot "$DEVICE" || true
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl location "$DEVICE" set '55.751244,37.618423'
-          xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/simulator -resultBundlePath build/iOS-tests.xcresult CODE_SIGNING_ALLOWED=NO test
+          (while true; do xcrun simctl location "$DEVICE" set '55.751244,37.618423'; sleep 5; done) &
+          GPS_PID=$!
+          trap 'kill "$GPS_PID" 2>/dev/null || true' EXIT
+          xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -destination "platform=iOS Simulator,id=$DEVICE" -parallel-testing-enabled NO -derivedDataPath build/simulator -resultBundlePath build/iOS-tests.xcresult CODE_SIGNING_ALLOWED=NO test
       - name: Build native iPhone app
         run: |
           xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
