@@ -221,7 +221,7 @@ class MainActivity: Activity(), LocationListener {
     private fun achievements() {
         val p=page("Достижения"); p.addView(text("Открываются по твоим настоящим маршрутам.",16)); val sessions=store.sessions
         val days=sessions.filter { it.points.isNotEmpty() }.map { java.time.Instant.ofEpochMilli(it.startedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay() }.toSet().sorted()
-        var longest=0; var streak=0; var last: Long?=null; for(day in days) { streak=if(last!=null && day-last!!==1L) streak+1 else 1; longest=max(longest,streak); last=day }
+        var longest=0; var streak=0; var last: Long?=null; for(day in days) { streak=if(last != null && day - last!! == 1L) streak+1 else 1; longest=max(longest,streak); last=day }
         val awards=listOf(Triple("Первый след","Заверши маршрут с координатами",sessions.any { it.points.isNotEmpty() }),Triple("Пешком интереснее","Пройди 10 км пешком",sessions.filter { it.mode.category==Mode.walk }.sumOf { it.distance() }>=10000),Triple("Исследователь","Заверши 10 маршрутов",sessions.size>=10),Triple("Неделя открытий","7 дней подряд с маршрутами",longest>=7),Triple("Коллекционер мест","Сохрани 5 личных мест",(personal().optJSONArray("places")?.length() ?: 0)>=5),Triple("Разными путями","Маршруты тремя способами",sessions.filter { it.points.isNotEmpty() }.map { it.mode.category }.toSet().size>=3))
         awards.forEach { (title,detail,earned) -> row(p,(if(earned) "★ " else "☆ ")+title,(if(earned) "Получено · " else "Ещё впереди · ")+detail,if(earned) accent else Color.GRAY) {} }
     }

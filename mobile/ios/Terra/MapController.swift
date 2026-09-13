@@ -335,6 +335,13 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     private func alert(_ title: String, _ message: String) { page(title).text(message) }
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer { let r = FogRenderer(overlay: overlay); r.dark = traitCollection.userInterfaceStyle == .dark; return r }
     func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) { mapView.accessibilityValue = String(format: "%.5f, %.5f", mapView.centerCoordinate.latitude, mapView.centerCoordinate.longitude) }
-    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) { if mapView.subviews.flatMap({ $0.gestureRecognizers ?? [] }).contains(where: { $0.state == .began || $0.state == .changed }) { following = false } }
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+        for child in mapView.subviews {
+            let gestures: [UIGestureRecognizer] = child.gestureRecognizers ?? []
+            for gesture in gestures {
+                if gesture.state == UIGestureRecognizer.State.began || gesture.state == UIGestureRecognizer.State.changed { following = false; return }
+            }
+        }
+    }
 
 }
