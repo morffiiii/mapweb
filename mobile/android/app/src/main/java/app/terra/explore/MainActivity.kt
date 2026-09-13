@@ -38,6 +38,7 @@ class MainActivity: Activity(), LocationListener {
     private var replayTask: Runnable?=null
     private var selectedPhoto: String?=null
     private var photoPreview: ImageView?=null
+    private var gate=false
     private var centered=false
     private var dark=true
     private var layer: Mode?=null
@@ -73,6 +74,8 @@ class MainActivity: Activity(), LocationListener {
         attribution.setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) }; bottom.addView(attribution); panel(root,bottom,false)
         mapView.getMapAsync { m -> map=m; m.uiSettings.isCompassEnabled=true; m.addOnCameraMoveListener { fog.invalidate() }; m.addOnCameraMoveStartedListener { reason -> if(reason==1) following=false }; m.addOnMapLongClickListener { coordinate -> markPlace(coordinate); true }; loadStyle(); refresh() }
         store.listeners.add(refreshListener); refresh()
+        gate=!getPreferences(0).getBoolean("onboardingComplete",false) || (LocalAccount(this).exists() && !getPreferences(0).getBoolean("localSession",false))
+        if(gate) welcome()
     }
     private fun loadStyle() {
         // Public OSM raster tiles: no API key, attribution remains in native map UI.
@@ -134,6 +137,7 @@ class MainActivity: Activity(), LocationListener {
                     "history" -> { c.drawCircle(12f,12f,8f,p); c.drawLine(12f,7f,12f,12f,p); c.drawLine(12f,12f,16f,14f,p) }
                     "location" -> { val path=Path(); path.moveTo(20f,4f); path.lineTo(14f,21f); path.lineTo(10f,14f); path.lineTo(3f,10f); path.close(); c.drawPath(path,p) }
                     "profile" -> { c.drawCircle(12f,8f,4f,p); c.drawArc(4f,13f,20f,27f,180f,180f,false,p) }
+                    "rhythm" -> { val path=Path(); path.moveTo(4f,21f); path.lineTo(11f,13f); path.lineTo(7f,9f); path.lineTo(20f,2f); path.lineTo(20f,9f); path.moveTo(20f,2f); path.lineTo(13f,2f); c.drawPath(path,p); c.drawCircle(4f,21f,2f,p) }
                     "layers" -> { for(y in listOf(5f,10f,15f)) { val path=Path(); path.moveTo(3f,y+3); path.lineTo(12f,y-1); path.lineTo(21f,y+3); path.lineTo(12f,y+7); path.close(); c.drawPath(path,p) } }
                     else -> { for((y,x) in listOf(6f to 9f,12f to 16f,18f to 7f)) { c.drawLine(3f,y,21f,y,p); c.drawCircle(x,y,2f,p) } }
                 }; c.restore()
@@ -150,11 +154,59 @@ class MainActivity: Activity(), LocationListener {
     }
     private fun closePage(column: LinearLayout) { val scroll=column.parent as? ScrollView ?: return; root.removeView(scroll); pages.remove(scroll) }
     private fun closePages() { pages.forEach { root.removeView(it) }; pages.clear() }
-    @Deprecated("Back navigation compatibility") override fun onBackPressed() { if(pages.isNotEmpty()) { root.removeView(pages.removeAt(pages.lastIndex)) } else super.onBackPressed() }
+    @Deprecated("Back navigation compatibility") override fun onBackPressed() { if(gate) { finish(); return }; if(pages.isNotEmpty()) { root.removeView(pages.removeAt(pages.lastIndex)) } else super.onBackPressed() }
     private fun row(page: LinearLayout,title: String, detail: String="", color: Int=accent, action: () -> Unit) {
         val b=button(title + if(detail.isBlank()) "" else "\n$detail",action); b.gravity=Gravity.START or Gravity.CENTER_VERTICAL; b.textSize=16f; b.setTextColor(color); b.setPadding(dp(18),dp(18),dp(18),dp(18)); b.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE)
         val params=LinearLayout.LayoutParams(-1,-2); params.topMargin=dp(14); page.addView(b,params)
     }
+    private fun entryPage(title: String): LinearLayout { closePages(); val p=page(title); (p.getChildAt(0) as LinearLayout).getChildAt(1).visibility=View.GONE; return p }
+    private fun field(p: LinearLayout,hint: String,type: Int=android.text.InputType.TYPE_CLASS_TEXT): EditText {
+        val f=EditText(this); f.hint=hint; f.contentDescription=hint; f.inputType=type; f.setTextColor(if(dark) Color.WHITE else Color.BLACK); f.setHintTextColor(Color.GRAY); f.setPadding(dp(12),dp(12),dp(12),dp(12)); p.addView(f); return f
+    }
+    private fun welcome() {
+        val p=entryPage("TERRA ↗"); p.addView(text("Мир становится твоим шаг за шагом.",32)); p.addView(text("Открывай карту прогулками, сохраняй места и находи свой ритм.",18))
+        if(!LocalAccount(this).exists()) { row(p,"Создать профиль") { credentials(true) }; row(p,"Продолжить без регистрации") { onboardingDetails() } }
+        row(p,"Войти") { credentials(false) }; p.addView(text("Пока профиль работает только на этом телефоне. Облачного переноса и восстановления по почте ещё нет.",15))
+    }
+    private fun credentials(register: Boolean) {
+        val p=entryPage(if(register) "Твой профиль" else "С возвращением"); p.addView(text("Локальный вход на этом устройстве. Почта служит логином и пока не подтверждается через сервер.",15))
+        val email=field(p,"Почта",android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+        val password=field(p,"Пароль · от 8 символов",android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        val feedback=text("",15); p.addView(feedback); var busy=false
+        row(p,if(register) "Зарегистрироваться" else "Войти") {
+            if(!busy) {
+                val mail=email.text.toString().trim(); val secret=password.text.toString()
+                if(!android.util.Patterns.EMAIL_ADDRESS.matcher(mail).matches() || mail.length>254 || secret.length !in 8..256) feedback.text="Проверь почту и пароль: от 8 до 256 символов."
+                else { busy=true; feedback.text="Сохраняем профиль…"; Thread {
+                    var error: String?=null
+                    try { val account=LocalAccount(this); if(register) account.register(mail,secret) else if(!account.login(mail,secret)) error="Почта или пароль не совпадают с профилем на этом телефоне." } catch(e: Exception) { error=e.localizedMessage ?: "Не удалось сохранить профиль" }
+                    runOnUiThread { busy=false; if(!isDestroyed && !isFinishing) { if(error!=null) feedback.text=error else { getPreferences(0).edit().putBoolean("localSession",true).apply(); if(getPreferences(0).getBoolean("onboardingComplete",false)) greeting() else onboardingDetails() } } }
+                }.start() }
+            }
+        }
+        row(p,"Назад") { if(!busy) welcome() }
+    }
+    private fun onboardingDetails() {
+        val p=entryPage("Познакомимся?"); p.addView(text("01 / 03 · Всё по желанию. Данные можно изменить в профиле.",16))
+        val name=field(p,"Как тебя зовут?"); val age=field(p,"Возраст",android.text.InputType.TYPE_CLASS_NUMBER); val height=field(p,"Рост, см",8194); val weight=field(p,"Вес, кг",8194)
+        val feedback=text("",15); p.addView(feedback)
+        row(p,"Продолжить") {
+            if(!validDetails(age.text.toString(),height.text.toString(),weight.text.toString())) feedback.text="Проверь значения или пропусти этот шаг."
+            else try { val data=personal(); data.put("name",name.text.toString().ifBlank { "Исследователь" }.take(60)); data.put("age",age.text.toString().toIntOrNull()); data.put("height",height.text.toString().replace(',','.').toDoubleOrNull()); data.put("weight",weight.text.toString().replace(',','.').toDoubleOrNull()); savePersonal(data); onboardingGoals() } catch(e: Exception) { feedback.text="Не удалось сохранить данные" }
+        }
+        row(p,"Пропустить") { onboardingGoals() }
+    }
+    private fun validDetails(age: String,height: String,weight: String): Boolean {
+        return (age.isBlank() || age.toIntOrNull()?.let { it in 1..120 }==true) && (height.isBlank() || height.replace(',','.').toDoubleOrNull()?.let { it in 50.0..250.0 }==true) && (weight.isBlank() || weight.replace(',','.').toDoubleOrNull()?.let { it in 10.0..400.0 }==true)
+    }
+    private fun choices(title: String,subtitle: String,options: List<String>,multiple: Boolean,done: (List<String>) -> Unit) {
+        val p=entryPage(title); p.addView(text(subtitle,16)); val selected=linkedSetOf<String>(); val buttons=mutableListOf<Button>()
+        options.forEach { option -> val b=button(option) { if(option in selected) selected.remove(option) else { if(!multiple) selected.clear(); selected.add(option) }; buttons.forEach { it.background=shape(if(it.text.toString() in selected) accent else if(dark) Color.rgb(32,34,42) else Color.WHITE); it.setTextColor(if(it.text.toString() in selected) Color.WHITE else accent) } }; b.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); b.textSize=18f; b.gravity=Gravity.START or Gravity.CENTER_VERTICAL; b.setPadding(dp(18),dp(18),dp(18),dp(18)); val params=LinearLayout.LayoutParams(-1,-2); params.topMargin=dp(14); p.addView(b,params); buttons.add(b) }
+        row(p,"Продолжить") { done(selected.toList()) }; row(p,"Пропустить") { done(emptyList()) }
+    }
+    private fun onboardingGoals() { choices("Что тебя зовёт?","02 / 03 · Можно выбрать несколько целей",listOf("Больше гулять","Открывать новые места","Кататься на велосипеде","Следить за активностью"),true) { values -> try { val data=personal(); data.put("intentions",org.json.JSONArray(values)); savePersonal(data); onboardingSource() } catch(e: Exception) { alert("Не удалось сохранить выбор") } } }
+    private fun onboardingSource() { choices("Как ты нас нашёл?","03 / 03 · Ответ необязателен",listOf("Друзья","Социальные сети","Поиск","Другое"),false) { values -> try { val data=personal(); data.put("source",values.firstOrNull()); savePersonal(data); greeting() } catch(e: Exception) { alert("Не удалось сохранить выбор") } } }
+    private fun greeting() { val p=entryPage("Привет,\n${personal().optString("name","Исследователь")}!"); p.addView(text("Первое открытие — выйти за дверь.",30)); p.addView(text("Начни свой маршрут. Карта запомнит путь, а «Ритм» поможет гулять регулярно.",18)); row(p,"Открыть мой мир") { getPreferences(0).edit().putBoolean("onboardingComplete",true).apply(); gate=false; closePages(); watch() } }
     private fun layers() {
         val p=page("Слои"); p.addView(text("В общем слое у каждого способа передвижения свой цвет.",15))
         row(p,"Все способы",if(layer==null) "Выбрано" else "") { layer=null; fog.invalidate(); closePage(p) }
@@ -174,12 +226,17 @@ class MainActivity: Activity(), LocationListener {
     private fun personal(): org.json.JSONObject = org.json.JSONObject(getPreferences(0).getString("personal","{}") ?: "{}")
     private fun savePersonal(p: org.json.JSONObject) { check(getPreferences(0).edit().putString("personal",p.toString()).commit()) { "Не удалось сохранить" } }
     private fun profile() {
-        val p=page("Твой профиль"); val data=personal(); val name=EditText(this); name.setText(data.optString("name","Исследователь")); name.setTextColor(if(dark) Color.WHITE else Color.BLACK); name.textSize=26f; name.setSingleLine(); p.addView(name)
+        val p=page("Твой профиль"); val data=personal()
+        val avatar=ImageView(this); val avatarPath=data.optString("avatar"); if(avatarPath.isNotBlank()) avatar.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,avatarPath).path)) else avatar.setImageDrawable(navIcon("Фото","profile") {}.drawable)
+        avatar.scaleType=ImageView.ScaleType.CENTER_CROP; avatar.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); avatar.clipToOutline=true; avatar.contentDescription="Фото профиля"; p.addView(avatar,LinearLayout.LayoutParams(dp(88),dp(88)))
+        row(p,"Изменить фото") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41) }
+        val name=EditText(this); name.setText(data.optString("name","Исследователь")); name.setTextColor(if(dark) Color.WHITE else Color.BLACK); name.textSize=26f; name.setSingleLine(); p.addView(name)
         row(p,"Сохранить имя") { try { val next=personal(); next.put("name",name.text.toString().take(60)); savePersonal(next); name.clearFocus() } catch(e: Exception) { alert(e.localizedMessage ?: "Ошибка сохранения") } }
         val sessions=store.sessions.toList(); p.addView(text("%.2f км".format(sessions.sumOf { it.distance() }/1000),36))
         p.addView(text("${sessions.size} маршрутов · ${sessions.count { it.startedAt>=System.currentTimeMillis()-7*86400000L }} за 7 дней\n${sessions.sumOf { it.duration() }/60} минут в движении",16))
         val streak=WalkingStreak.status(WalkingStreak.days(sessions),restores())
-        p.addView(text("🔥 ${streak.count} дней подряд",28)); p.addView(text((if(streak.walkedToday) "Сегодня прогулка засчитана." else "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: ${streak.remaining} из 3.",16))
+        val rhythm=LinearLayout(this); rhythm.gravity=Gravity.CENTER_VERTICAL; rhythm.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); rhythm.setPadding(dp(16),dp(16),dp(16),dp(16)); rhythm.addView(navIcon("Ритм прогулок","rhythm") {},LinearLayout.LayoutParams(dp(72),dp(80))); rhythm.addView(text("РИТМ\n${streak.count} дней подряд",24)); p.addView(rhythm)
+        p.addView(text((if(streak.walkedToday) "Сегодня прогулка засчитана." else "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: ${streak.remaining} из 3.",16))
         if(streak.canRestore) row(p,"Восстановить серию","Закрыть вчерашний пропуск · 1 восстановление") {
             val current=WalkingStreak.status(WalkingStreak.days(store.sessions),restores())
             if(current.canRestore) try { val data=personal(); val a=data.optJSONArray("restores") ?: org.json.JSONArray(); a.put(org.json.JSONObject().put("day",current.yesterday).put("usedOn",current.today)); data.put("restores",a); savePersonal(data); closePage(p); profile() } catch(e: Exception) { alert("Не удалось восстановить серию") }
@@ -195,6 +252,18 @@ class MainActivity: Activity(), LocationListener {
         row(p,"Мои места","Удерживай карту, чтобы добавить заметку или фото") { places() }
         row(p,"Мои цели","Расстояние, маршруты, открытая площадь") { goals() }
         row(p,"Достижения","Награды за настоящие открытия") { achievements() }
+        row(p,"Личные данные","Имя, возраст, рост, вес и интересы") { editProfile() }
+        row(p,if(LocalAccount(this).exists()) "Выйти" else "Создать локальный профиль","Маршруты останутся на этом телефоне") { if(store.active!=null) alert("Сначала заверши текущую запись") else { getPreferences(0).edit().putBoolean("localSession",false).apply(); gate=true; location.removeUpdates(this); welcome() } }
+    }
+    private fun editProfile() {
+        val p=page("Личные данные"); val data=personal(); val name=field(p,"Имя"); name.setText(data.optString("name","Исследователь")); val age=field(p,"Возраст",2); age.setText(data.optString("age")); val height=field(p,"Рост, см",8194); height.setText(data.optString("height")); val weight=field(p,"Вес, кг",8194); weight.setText(data.optString("weight")); p.addView(text("Все поля необязательны. Очисти значение, чтобы удалить его.",15))
+        row(p,"Сохранить") {
+            if(!validDetails(age.text.toString(),height.text.toString(),weight.text.toString())) alert("Проверь возраст, рост и вес или оставь поля пустыми.")
+            else try { val next=personal(); next.put("name",name.text.toString().ifBlank { "Исследователь" }.take(60)); next.put("age",age.text.toString().toIntOrNull()); next.put("height",height.text.toString().replace(',','.').toDoubleOrNull()); next.put("weight",weight.text.toString().replace(',','.').toDoubleOrNull()); savePersonal(next); closePages(); profile() } catch(e: Exception) { alert("Не удалось сохранить данные") }
+        }
+        p.addView(text("Интересы",22)); val selected=data.optJSONArray("intentions") ?: org.json.JSONArray(); val values=(0 until selected.length()).map { selected.getString(it) }.toMutableSet()
+        listOf("Больше гулять","Открывать новые места","Кататься на велосипеде","Следить за активностью").forEach { option -> row(p,option,if(option in values) "Выбрано · убрать" else "Добавить") { try { if(option in values) values.remove(option) else values.add(option); val next=personal(); next.put("intentions",org.json.JSONArray(values.toList())); savePersonal(next); closePage(p); editProfile() } catch(e: Exception) { alert("Не удалось сохранить выбор") } } }
+        p.addView(text("Как узнал о Terra",22)); listOf("Друзья","Социальные сети","Поиск","Другое").forEach { option -> row(p,option,if(data.optString("source")==option) "Выбрано" else "") { try { val next=personal(); next.put("source",option); savePersonal(next); closePage(p); editProfile() } catch(e: Exception) { alert("Не удалось сохранить выбор") } } }
     }
     private fun goals() {
         val p=page("Мои цели"); p.addView(text("Прогресс учитывает все завершённые маршруты.",15))
@@ -271,12 +340,13 @@ class MainActivity: Activity(), LocationListener {
         }
     }
     override fun onActivityResult(request: Int,result: Int,data: Intent?) {
-        super.onActivityResult(request,result,data); if(request!=40 || result!=RESULT_OK) return; val uri=data?.data ?: return
+        super.onActivityResult(request,result,data); if(request !in listOf(40,41) || result!=RESULT_OK) return; val uri=data?.data ?: return
         try {
             val options=BitmapFactory.Options().also { it.inJustDecodeBounds=true }; contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,options) }
             require(options.outWidth>0 && options.outHeight>0); options.inSampleSize=max(1,max(options.outWidth,options.outHeight)/1400); options.inJustDecodeBounds=false
             val bitmap=contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,options) } ?: error("Фото недоступно")
-            val path="place-${java.util.UUID.randomUUID()}.jpg"; java.io.File(filesDir,path).outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG,80,it) }; selectedPhoto=path; photoPreview?.setImageBitmap(bitmap); photoPreview?.visibility=View.VISIBLE
+            val path=if(request==41) "avatar.jpg" else "place-${java.util.UUID.randomUUID()}.jpg"; java.io.File(filesDir,path).outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG,80,it) }
+            if(request==41) { val next=personal(); next.put("avatar",path); savePersonal(next); closePages(); profile() } else { selectedPhoto=path; photoPreview?.setImageBitmap(bitmap); photoPreview?.visibility=View.VISIBLE }
         } catch(e: Exception) { alert("Не удалось открыть фото") }
     }
     private fun alert(message: String) { page("Terra").addView(text(message,18)) }
@@ -286,7 +356,7 @@ class MainActivity: Activity(), LocationListener {
     @Deprecated("Required on Android 8–10")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onStart() { super.onStart(); mapView.onStart() }
-    override fun onResume() { super.onResume(); mapView.onResume(); watch(); handler.post(tick) }
+    override fun onResume() { super.onResume(); mapView.onResume(); if(!gate) watch(); handler.post(tick) }
     override fun onPause() { handler.removeCallbacks(tick); location.removeUpdates(this); mapView.onPause(); super.onPause() }
     override fun onStop() { mapView.onStop(); super.onStop() }
     override fun onDestroy() { handler.removeCallbacksAndMessages(null); store.listeners.remove(refreshListener); mapView.onDestroy(); super.onDestroy() }

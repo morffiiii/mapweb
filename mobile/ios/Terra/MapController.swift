@@ -198,6 +198,17 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     }
     @objc private func profile() {
         let p = page("Твой профиль"), personal = PersonalStore.shared
+        let avatar = UIImageView(); avatar.contentMode = .scaleAspectFill; avatar.clipsToBounds = true; avatar.layer.cornerRadius = 44; avatar.tintColor = accent
+        avatar.image = personal.data.avatar.flatMap { UIImage(contentsOfFile: personal.directory.appendingPathComponent($0).path) } ?? UIImage(systemName: "person.crop.circle.fill")
+        let avatarRow = UIStackView(); avatarRow.addArrangedSubview(avatar); avatar.widthAnchor.constraint(equalToConstant: 88).isActive = true; avatar.heightAnchor.constraint(equalToConstant: 88).isActive = true; avatarRow.addArrangedSubview(UIView()); p.content.addArrangedSubview(avatarRow)
+        p.action("Изменить фото",icon: "camera") { [weak self,weak p] in
+            var config = PHPickerConfiguration(); config.filter = .images; config.selectionLimit = 1; let picker = PHPickerViewController(configuration: config); picker.delegate = self
+            self?.photoHandler = { [weak self,weak p] image in
+                do { let scale = min(1,800/max(image.size.width,image.size.height)); let size = CGSize(width: image.size.width*scale,height: image.size.height*scale); let resized = UIGraphicsImageRenderer(size: size).image { _ in image.draw(in: CGRect(origin: .zero,size: size)) }; guard let bytes = resized.jpegData(compressionQuality: 0.85) else { throw TrackError.storage }
+                    try FileManager.default.createDirectory(at: personal.directory,withIntermediateDirectories: true); try bytes.write(to: personal.directory.appendingPathComponent("avatar.jpg"),options: .atomic); try personal.update { $0.avatar = "avatar.jpg" }; p?.close(); self?.profile()
+                } catch { self?.alert("Фото",error.localizedDescription) }
+            }; self?.present(picker,animated: true)
+        }
         let name = UITextField(); name.text = personal.data.name; name.font = .systemFont(ofSize: 28, weight: .bold); name.placeholder = "Твоё имя"; name.autocorrectionType = .no
         p.content.addArrangedSubview(name)
         p.action("Сохранить имя", icon: "checkmark") { [weak self, weak name] in do { try personal.update { $0.name = String((name?.text ?? "Исследователь").prefix(60)) }; name?.resignFirstResponder() } catch { self?.alert("Профиль", error.localizedDescription) } }
@@ -206,9 +217,11 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         let week = Date().timeIntervalSince1970*1000-7*86400000
         p.text("\(sessions.count) маршрутов · \(sessions.filter { $0.startedAt >= week }.count) за последние 7 дней\n\(Int(sessions.reduce(0) { $0+$1.duration() }/60)) минут в движении")
         let streak = WalkingStreak.status(walked: WalkingStreak.days(sessions), restores: personal.data.restores ?? [])
-        p.text("🔥 \(streak.count) дней подряд", large: true)
+        let rhythm = UIStackView(); rhythm.axis = .horizontal; rhythm.spacing = 18; rhythm.alignment = .center; rhythm.isLayoutMarginsRelativeArrangement = true; rhythm.layoutMargins = UIEdgeInsets(top: 20,left: 18,bottom: 20,right: 18); rhythm.backgroundColor = .secondarySystemBackground; rhythm.layer.cornerRadius = 24
+        let mark = RhythmMark(); mark.widthAnchor.constraint(equalToConstant: 64).isActive = true; mark.heightAnchor.constraint(equalToConstant: 72).isActive = true; rhythm.addArrangedSubview(mark)
+        let rhythmText = UILabel(); rhythmText.text = "РИТМ\n\(streak.count) дней подряд"; rhythmText.font = .systemFont(ofSize: 24,weight: .bold); rhythmText.numberOfLines = 2; rhythm.addArrangedSubview(rhythmText); p.content.addArrangedSubview(rhythm)
         p.text((streak.walkedToday ? "Сегодня прогулка засчитана." : "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: \(streak.remaining) из 3.")
-        if streak.canRestore { p.action("Восстановить серию", detail: "Закрыть вчерашний пропуск · 1 восстановление", icon: "flame.fill") { [weak self, weak p] in
+        if streak.canRestore { p.action("Восстановить серию", detail: "Закрыть вчерашний пропуск · 1 восстановление", icon: "arrow.counterclockwise") { [weak self, weak p] in
             let current = WalkingStreak.status(walked: WalkingStreak.days(self?.engine.state.sessions ?? []), restores: personal.data.restores ?? [])
             guard current.canRestore else { return }
             do { try personal.update { if $0.restores == nil { $0.restores = [] }; $0.restores?.append(StreakRestore(day: current.yesterday, usedOn: current.today)) }; p?.close(); self?.profile() } catch { self?.alert("Серия", error.localizedDescription) }
@@ -230,6 +243,27 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         p.action("Мои места", detail: "\(personal.data.places.count) заметок · удерживай карту, чтобы добавить", icon: "mappin.and.ellipse") { [weak self] in self?.places() }
         p.action("Мои цели", detail: "Расстояние, маршруты, открытая площадь", icon: "target") { [weak self] in self?.goals() }
         p.action("Достижения", detail: "Твои открытия в цифрах и наградах", icon: "medal") { [weak self] in self?.achievements() }
+        p.action("Личные данные",detail: "Имя, возраст, рост, вес и интересы",icon: "person.text.rectangle") { [weak self] in self?.editProfile() }
+        p.action(LocalAccount.record() == nil ? "Создать локальный профиль" : "Выйти",detail: "Маршруты останутся на этом телефоне",icon: "person.crop.circle") { [weak self] in
+            guard self?.engine.state.active == nil else { self?.alert("Маршрут","Сначала заверши текущую запись."); return }; UserDefaults.standard.set(false,forKey: "localSession"); self?.view.window?.rootViewController = WelcomeController()
+        }
+    }
+    private func editProfile() {
+        let p = page("Личные данные"), store = PersonalStore.shared
+        let values: [(String,String)] = [("Имя",store.data.name),("Возраст",store.data.age.map(String.init) ?? ""),("Рост, см",store.data.height.map { String($0) } ?? ""),("Вес, кг",store.data.weight.map { String($0) } ?? "")]
+        var fields: [UITextField] = []
+        for (i,value) in values.enumerated() { p.text(value.0); let f = UITextField(); f.text = value.1; f.borderStyle = .roundedRect; f.keyboardType = i == 0 ? .default : i == 1 ? .numberPad : .decimalPad; p.content.addArrangedSubview(f); fields.append(f) }
+        p.text("Все поля необязательны. Очисти значение, чтобы удалить его.")
+        p.action("Сохранить",icon: "checkmark") { [weak self,weak p] in
+            let a = fields[1].text ?? "", h = (fields[2].text ?? "").replacingOccurrences(of: ",",with: "."), w = (fields[3].text ?? "").replacingOccurrences(of: ",",with: ".")
+            guard (a.isEmpty || (Int(a).map { (1...120).contains($0) } ?? false)),(h.isEmpty || (Double(h).map { (50...250).contains($0) } ?? false)),(w.isEmpty || (Double(w).map { (10...400).contains($0) } ?? false)) else { self?.alert("Данные","Проверь возраст, рост и вес или оставь поля пустыми."); return }
+            do { try store.update { $0.name = fields[0].text?.isEmpty == false ? String(fields[0].text!.prefix(60)) : "Исследователь"; $0.age = Int(a); $0.height = Double(h); $0.weight = Double(w) }; p?.close(); self?.closePages(); self?.profile() } catch { self?.alert("Данные",error.localizedDescription) }
+        }
+        for option in ["Больше гулять","Открывать новые места","Кататься на велосипеде","Следить за активностью"] {
+            p.action(option,detail: store.data.intentions?.contains(option) == true ? "Выбрано · нажми, чтобы убрать" : "Добавить в интересы",icon: "sparkle") { [weak self,weak p] in do { try store.update { var choices = $0.intentions ?? []; if choices.contains(option) { choices.removeAll { $0 == option } } else { choices.append(option) }; $0.intentions = choices }; p?.close(); self?.editProfile() } catch { self?.alert("Данные",error.localizedDescription) } }
+        }
+        p.text("Как узнал о Terra")
+        for option in ["Друзья","Социальные сети","Поиск","Другое"] { p.action(option,detail: store.data.source == option ? "Выбрано" : "",icon: "bubble") { [weak self,weak p] in do { try store.update { $0.source = option }; p?.close(); self?.editProfile() } catch { self?.alert("Данные",error.localizedDescription) } } }
     }
     private func goals() {
         let p = page("Мои цели"), store = PersonalStore.shared, sessions = engine.state.sessions

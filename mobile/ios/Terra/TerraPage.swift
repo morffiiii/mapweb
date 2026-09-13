@@ -8,7 +8,8 @@ extension TravelMode {
 final class TerraPage: UIViewController {
     let content = UIStackView()
     let heading: String
-    init(_ title: String) { heading = title; super.init(nibName: nil, bundle: nil) }
+    var dismissible = true
+    init(_ title: String, dismissible: Bool = true) { heading = title; self.dismissible = dismissible; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -21,6 +22,7 @@ final class TerraPage: UIViewController {
         let top = UIStackView(); top.alignment = .center
         let title = UILabel(); title.text = heading; title.font = .systemFont(ofSize: 32, weight: .bold); title.numberOfLines = 2; top.addArrangedSubview(title)
         let close = UIButton(type: .system); close.setImage(UIImage(systemName: "xmark"), for: .normal); close.accessibilityLabel = "Закрыть"; close.widthAnchor.constraint(equalToConstant: 48).isActive = true; close.heightAnchor.constraint(equalToConstant: 48).isActive = true; close.addAction(UIAction { [weak self] _ in self?.close() }, for: .touchUpInside); top.addArrangedSubview(close); content.addArrangedSubview(top)
+        close.isHidden = !dismissible
     }
     func close() { willMove(toParent: nil); UIView.animate(withDuration: 0.2, animations: { self.view.alpha = 0 }) { _ in self.view.removeFromSuperview(); self.removeFromParent() } }
     @discardableResult func text(_ value: String, large: Bool = false) -> UILabel {

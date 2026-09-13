@@ -5,7 +5,10 @@ struct Place: Codable { var id = UUID().uuidString; var lat: Double; var lng: Do
 struct Territory: Codable { var lat: Double; var lng: Double; var radius: Double = 500 }
 struct PersonalGoal: Codable { var id = UUID().uuidString; var title: String; var kind: String; var target: Double }
 struct StreakRestore: Codable { var day: String; var usedOn: String }
-struct PersonalData: Codable { var name = "Исследователь"; var places: [Place] = []; var territory: Territory?; var goals: [PersonalGoal]?; var restores: [StreakRestore]? }
+struct PersonalData: Codable {
+    var name = "Исследователь"; var places: [Place] = []; var territory: Territory?; var goals: [PersonalGoal]?; var restores: [StreakRestore]?
+    var age: Int?; var height: Double?; var weight: Double?; var intentions: [String]?; var source: String?; var avatar: String?
+}
 final class PersonalStore {
     static let shared = PersonalStore()
     private(set) var data = PersonalData()

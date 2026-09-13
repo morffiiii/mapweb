@@ -6,7 +6,13 @@ final class MapTests: XCTestCase {
             for title in ["Allow While Using App", "Разрешить при использовании"] { if alert.buttons[title].exists { alert.buttons[title].tap(); return true } }
             return false
         }
-        app.launch(); app.tap()
+        app.launch()
+        if app.buttons["Продолжить без регистрации"].waitForExistence(timeout: 5) {
+            tap(app.buttons["Продолжить без регистрации"],in: app)
+            for _ in 0..<3 { tap(app.buttons["Пропустить"],in: app) }
+            capture(app,"00-welcome"); tap(app.buttons["Открыть мой мир"],in: app)
+        }
+        app.tap()
         continueAfterFailure = false
         let nativeMap = app.descendants(matching: .any).matching(identifier: "nativeMap").firstMatch
         XCTAssertTrue(nativeMap.waitForExistence(timeout: 15))
@@ -42,4 +48,5 @@ final class MapTests: XCTestCase {
         app.buttons["Завершить"].tap()
     }
     private func capture(_ app: XCUIApplication, _ name: String) { let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot) }
+    private func tap(_ element: XCUIElement,in app: XCUIApplication) { XCTAssertTrue(element.waitForExistence(timeout: 10)); for _ in 0..<8 { if element.isHittable { break }; app.scrollViews.firstMatch.swipeUp() }; element.tap() }
 }
