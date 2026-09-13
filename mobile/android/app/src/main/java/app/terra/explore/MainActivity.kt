@@ -230,12 +230,13 @@ class MainActivity: Activity(), LocationListener {
         val avatar=ImageView(this); val avatarPath=data.optString("avatar"); if(avatarPath.isNotBlank()) avatar.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,avatarPath).path)) else avatar.setImageDrawable(navIcon("Фото","profile") {}.drawable)
         avatar.scaleType=ImageView.ScaleType.CENTER_CROP; avatar.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); avatar.clipToOutline=true; avatar.contentDescription="Фото профиля"; p.addView(avatar,LinearLayout.LayoutParams(dp(88),dp(88)))
         row(p,"Изменить фото") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41) }
-        val name=EditText(this); name.setText(data.optString("name","Исследователь")); name.setTextColor(if(dark) Color.WHITE else Color.BLACK); name.textSize=26f; name.setSingleLine(); p.addView(name)
-        row(p,"Сохранить имя") { try { val next=personal(); next.put("name",name.text.toString().take(60)); savePersonal(next); name.clearFocus() } catch(e: Exception) { alert(e.localizedMessage ?: "Ошибка сохранения") } }
+        p.addView(text(data.optString("name","Исследователь"),28))
         val sessions=store.sessions.toList(); p.addView(text("%.2f км".format(sessions.sumOf { it.distance() }/1000),36))
         p.addView(text("${sessions.size} маршрутов · ${sessions.count { it.startedAt>=System.currentTimeMillis()-7*86400000L }} за 7 дней\n${sessions.sumOf { it.duration() }/60} минут в движении",16))
         val streak=WalkingStreak.status(WalkingStreak.days(sessions),restores())
         val rhythm=LinearLayout(this); rhythm.gravity=Gravity.CENTER_VERTICAL; rhythm.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); rhythm.setPadding(dp(16),dp(16),dp(16),dp(16)); rhythm.addView(navIcon("Ритм прогулок","rhythm") {},LinearLayout.LayoutParams(dp(72),dp(80))); rhythm.addView(text("РИТМ\n${streak.count} дней подряд",24)); p.addView(rhythm)
+        val weekRow=LinearLayout(this); val walked=WalkingStreak.days(sessions); val restored=restores().map { it.day }.toSet()
+        for(offset in -6L..0L) { val day=java.time.LocalDate.now().plusDays(offset); val key=day.toString(); val label=text(day.format(java.time.format.DateTimeFormatter.ofPattern("EE"))+"\n"+(if(key in walked) "●" else if(key in restored) "↻" else "○"),12); label.gravity=Gravity.CENTER; label.setTextColor(if(key in walked) accent else if(key in restored) Mode.car.color else Color.GRAY); weekRow.addView(label,LinearLayout.LayoutParams(0,-2,1f)) }; p.addView(weekRow)
         p.addView(text((if(streak.walkedToday) "Сегодня прогулка засчитана." else "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: ${streak.remaining} из 3.",16))
         if(streak.canRestore) row(p,"Восстановить серию","Закрыть вчерашний пропуск · 1 восстановление") {
             val current=WalkingStreak.status(WalkingStreak.days(store.sessions),restores())

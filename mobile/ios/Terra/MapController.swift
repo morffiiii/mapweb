@@ -209,9 +209,8 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
                 } catch { self?.alert("Фото",error.localizedDescription) }
             }; self?.present(picker,animated: true)
         }
-        let name = UITextField(); name.text = personal.data.name; name.font = .systemFont(ofSize: 28, weight: .bold); name.placeholder = "Твоё имя"; name.autocorrectionType = .no
+        let name = UILabel(); name.text = personal.data.name; name.font = .systemFont(ofSize: 28, weight: .bold); name.numberOfLines = 2
         p.content.addArrangedSubview(name)
-        p.action("Сохранить имя", icon: "checkmark") { [weak self, weak name] in do { try personal.update { $0.name = String((name?.text ?? "Исследователь").prefix(60)) }; name?.resignFirstResponder() } catch { self?.alert("Профиль", error.localizedDescription) } }
         let sessions = engine.state.sessions, km = sessions.reduce(0) { $0+$1.distance }/1000
         p.text(String(format: "%.2f км", km), large: true)
         let week = Date().timeIntervalSince1970*1000-7*86400000
@@ -220,6 +219,12 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         let rhythm = UIStackView(); rhythm.axis = .horizontal; rhythm.spacing = 18; rhythm.alignment = .center; rhythm.isLayoutMarginsRelativeArrangement = true; rhythm.layoutMargins = UIEdgeInsets(top: 20,left: 18,bottom: 20,right: 18); rhythm.backgroundColor = .secondarySystemBackground; rhythm.layer.cornerRadius = 24
         let mark = RhythmMark(); mark.widthAnchor.constraint(equalToConstant: 64).isActive = true; mark.heightAnchor.constraint(equalToConstant: 72).isActive = true; rhythm.addArrangedSubview(mark)
         let rhythmText = UILabel(); rhythmText.text = "РИТМ\n\(streak.count) дней подряд"; rhythmText.font = .systemFont(ofSize: 24,weight: .bold); rhythmText.numberOfLines = 2; rhythm.addArrangedSubview(rhythmText); p.content.addArrangedSubview(rhythm)
+        let weekRow = UIStackView(); weekRow.distribution = .fillEqually; weekRow.spacing = 5
+        let walked = WalkingStreak.days(sessions), restored = Set((personal.data.restores ?? []).map(\.day))
+        let dayFormatter = DateFormatter(); dayFormatter.dateFormat = "EE"
+        for offset in -6...0 { let date = Calendar.current.date(byAdding: .day,value: offset,to: Date())!, key = WalkingStreak.key(date)
+            let day = UILabel(); day.numberOfLines = 2; day.textAlignment = .center; day.font = .systemFont(ofSize: 12,weight: .semibold); day.text = dayFormatter.string(from: date)+"\n"+(walked.contains(key) ? "●" : restored.contains(key) ? "↻" : "○"); day.textColor = walked.contains(key) ? accent : restored.contains(key) ? .systemPurple : .secondaryLabel; day.accessibilityLabel = key+(walked.contains(key) ? " — прогулка" : restored.contains(key) ? " — восстановлен" : " — нет прогулки"); weekRow.addArrangedSubview(day)
+        }; p.content.addArrangedSubview(weekRow)
         p.text((streak.walkedToday ? "Сегодня прогулка засчитана." : "Прогулка от 5 минут с движением продолжит серию.")+"\nВосстановлений в этом месяце: \(streak.remaining) из 3.")
         if streak.canRestore { p.action("Восстановить серию", detail: "Закрыть вчерашний пропуск · 1 восстановление", icon: "arrow.counterclockwise") { [weak self, weak p] in
             let current = WalkingStreak.status(walked: WalkingStreak.days(self?.engine.state.sessions ?? []), restores: personal.data.restores ?? [])
