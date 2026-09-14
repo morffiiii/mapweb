@@ -3,7 +3,7 @@ import MapKit
 import YandexMapsMobile
 
 /// Native map with a noninteractive exploration layer; GPS remains owned by TrackingEngine.
-final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener {
+final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener, YMKMapLoadedListener {
     static var selected: Bool { UserDefaults.standard.string(forKey: "mapProvider") != "apple" }
     let native = YMKMapView(frame: .zero)!
     private let ink = YandexInk()
@@ -23,6 +23,8 @@ final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener {
         addSubview(native); addSubview(ink); ink.owner = self
         native.mapWindow.map.addInputListener(with: self)
         native.mapWindow.map.addCameraListener(with: self)
+        native.mapWindow.map.setMapLoadedListenerWith(self)
+        native.mapWindow.map.logo.setAlignmentWith(YMKLogoAlignment(horizontalAlignment: .left,verticalAlignment: .bottom))
         native.mapWindow.map.isTiltGesturesEnabled = false
         accessibilityIdentifier = "nativeMap"; isAccessibilityElement = true
         accessibilityLabel = "Карта открытий"; accessibilityTraits = .allowsDirectInteraction
@@ -51,6 +53,7 @@ final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener {
         if let found = candidates.min(by: { $0.1 < $1.1 }), found.1 < 32 { onPlace?(found.0) }
     }
     func onMapLongTap(with map: YMKMap, point: YMKPoint) { onLongPress?(CLLocationCoordinate2D(latitude: point.latitude,longitude: point.longitude)) }
+    func onMapLoaded(with statistics: YMKMapLoadStatistics) { accessibilityLabel = "Карта открытий · Яндекс · загружена" }
     func onCameraPositionChanged(with map: YMKMap?, cameraPosition: YMKCameraPosition, cameraUpdateReason: YMKCameraUpdateReason, finished: Bool) {
         ink.setNeedsDisplay()
         accessibilityValue = String(format: "%.5f, %.5f",cameraPosition.target.latitude,cameraPosition.target.longitude)

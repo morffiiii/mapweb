@@ -50,6 +50,7 @@ class YandexSurface(context: Context): FrameLayout(context) {
         native.mapWindow.map.addCameraListener(java.lang.ref.WeakReference(cameraListener))
         native.mapWindow.map.addInputListener(java.lang.ref.WeakReference<InputListener>(inputListener))
         native.mapWindow.map.isTiltGesturesEnabled=false
+        native.mapWindow.map.logo.setAlignment(com.yandex.mapkit.logo.Alignment(com.yandex.mapkit.logo.HorizontalAlignment.LEFT,com.yandex.mapkit.logo.VerticalAlignment.BOTTOM))
     }
     fun start() { native.onStart() }
     fun stop() { native.onStop() }

@@ -202,6 +202,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
                 surface.onLongPress = { [weak self] point in self?.editPlace(Place(lat: point.latitude,lng: point.longitude,note: ""),isNew: true) }
                 surface.onPlace = { [weak self] place in self?.placeDetails(place) }
                 surface.onGesture = { [weak self] in self?.following = false }
+                surface.nearby = nearbyPins.map(\.coordinate)
                 yandex = surface; view.insertSubview(surface,aboveSubview: map)
             }
             map.isHidden = true

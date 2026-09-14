@@ -24,6 +24,8 @@ final class MapTests: XCTestCase {
         let gps = app.staticTexts["gpsStatus"]
         expectation(for: NSPredicate(format: "label BEGINSWITH 'GPS'"), evaluatedWith: gps)
         waitForExpectations(timeout: 30)
+        expectation(for: NSPredicate(format: "label CONTAINS 'загружена'"),evaluatedWith: nativeMap)
+        waitForExpectations(timeout: 60)
         capture(app, "01-map")
         nativeMap.coordinate(withNormalizedOffset: CGVector(dx: 0.25,dy: 0.4)).press(forDuration: 1.2)
         let placeTitle = app.textFields["placeTitle"]
