@@ -10,6 +10,9 @@ class Store private constructor(context: Context) {
     val sessions = mutableListOf<Session>()
     var active: Session? = null
     var position: Point? = null
+    val liveSpeed=LiveSpeed()
+    var modeGuard=ModeSpeedGuard()
+    var stepsAvailable=false
     var message = "Определяем местоположение…"
     var blocked = false
     var pending: Mode? = null

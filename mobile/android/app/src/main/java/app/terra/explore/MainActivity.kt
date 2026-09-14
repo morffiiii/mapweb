@@ -25,8 +25,11 @@ class MainActivity: Activity(), LocationListener {
     private lateinit var store: Store
     private lateinit var location: LocationManager
     private lateinit var status: TextView
+    private lateinit var dashboard: LinearLayout
+    private val metricValues=mutableMapOf<String,TextView>()
     private lateinit var activity: TextView
     private val routeMaps=mutableMapOf<ScrollView,MapView>()
+    private val videos=mutableMapOf<ScrollView,VideoView>()
     private val routeTasks=mutableMapOf<ScrollView,Runnable>()
     private val showFog get()=getPreferences(0).getBoolean("showFog",true)
     private val showPlaces get()=getPreferences(0).getBoolean("showPlaces",true)
@@ -40,6 +43,11 @@ class MainActivity: Activity(), LocationListener {
     private var wasRecording=false
     private var lastCameraPoint: Point?=null
     private var selectedPhoto: String?=null
+    private val editingMedia=mutableListOf<org.json.JSONObject>()
+    private var mediaGallery: LinearLayout?=null
+    private var mediaBusy=false
+    private var cameraUri: android.net.Uri?=null
+    private val nearbyMarkers=mutableListOf<org.maplibre.android.annotations.Marker>()
     private var photoPreview: ImageView?=null
     private var gate=false
     private var centered=false
@@ -65,7 +73,7 @@ class MainActivity: Activity(), LocationListener {
         val bottom=LinearLayout(this); bottom.orientation=LinearLayout.VERTICAL
         status=text("",12); metric=text("",25); metric.typeface=Typeface.MONOSPACE
         activity=text("",14)
-        bottom.addView(status); bottom.addView(metric); bottom.addView(activity)
+        bottom.addView(status); bottom.addView(metric); dashboard=metricPanel(); bottom.addView(dashboard)
         modes=Spinner(this); modes.adapter=object: ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,Mode.visible.map { it.title }) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View = super.getView(position,convertView,parent).also { (it as TextView).setTextColor(if(dark) Color.WHITE else Color.BLACK); it.setPadding(dp(8),dp(10),dp(8),dp(10)) }
         }.also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
@@ -107,12 +115,14 @@ class MainActivity: Activity(), LocationListener {
     private fun locate() { if(!permitted()) { watch(); return }; store.position?.let { map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat,it.lng),15.5)) } ?: run { store.message="Ждём сигнал GPS…"; watch(); refresh() } }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code,permissions,results)
+        if(code==22) { toggle(); return }
         if(code==20) { if(permitted()) watch() else { store.message="Нужна точная геопозиция. Разреши её в настройках Terra."; refresh(); AlertDialog.Builder(this).setMessage(store.message).setPositiveButton("Настройки") { _,_ -> startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName"))) }.setNegativeButton("Позже",null).show() } }
     }
     private fun toggle() {
         if(store.pending!=null) { command("pause"); return }
         if(store.active!=null && store.active?.pausedAt==null) { command("pause"); return }
         if(!permitted()) { watch(); return }
+        if(Build.VERSION.SDK_INT>=29 && Mode.visible[modes.selectedItemPosition]==Mode.walk && checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION)!=PackageManager.PERMISSION_GRANTED && !getPreferences(0).getBoolean("stepsAsked",false)) { getPreferences(0).edit().putBoolean("stepsAsked",true).apply(); requestPermissions(arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),22); return }
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),21)
         val intent=Intent(this,TrackingService::class.java).putExtra("mode",Mode.visible[modes.selectedItemPosition].name)
         try { startForegroundService(intent) } catch(e: Exception) { alert("Не удалось начать запись: ${e.localizedMessage}") }
@@ -120,8 +130,12 @@ class MainActivity: Activity(), LocationListener {
     private fun command(action: String) { startService(Intent(this,TrackingService::class.java).setAction(action)) }
     private fun refresh() {
         if(!::status.isInitialized) return
-        status.text=store.message
-        activity.visibility=if(store.active==null) View.GONE else View.VISIBLE
+        status.text=if(store.active?.pausedAt==null && store.active!=null && !store.modeGuard.allowsDiscovery) "Скорость не соответствует режиму · открытие приостановлено" else store.message
+        dashboard.visibility=if(store.active==null) View.GONE else View.VISIBLE
+        metric.visibility=if(store.active==null) View.VISIBLE else View.GONE
+        modes.visibility=if(store.active==null) View.VISIBLE else View.GONE
+        store.active?.let { s -> metricValues["km"]?.text="%.2f".format(s.distance()/1000); val sec=s.duration(); metricValues["time"]?.text=if(sec>=3600) "%d:%02d:%02d".format(sec/3600,sec/60%60,sec%60) else "%02d:%02d".format(sec/60,sec%60); metricValues["speed"]?.text=if(s.pausedAt!=null) "0.0" else store.liveSpeed.value(System.currentTimeMillis())?.let { "%.1f".format(it) } ?: "—"; metricValues["steps"]?.text=if(s.mode==Mode.walk && store.stepsAvailable) (s.steps ?: 0).toString() else "—"; metricValues["energy"]?.text="%.0f".format(ActivityMetrics.calories(s,personal().optDouble("weight"))) }
+        activity.visibility=View.GONE
         store.active?.let { activity.text="%.1f км/ч · ≈ %.0f активных ккал".format(ActivityMetrics.speed(it),ActivityMetrics.calories(it,personal().optDouble("weight"))) }
         val s=store.active
         val recording=s!=null && s.pausedAt==null
@@ -134,12 +148,33 @@ class MainActivity: Activity(), LocationListener {
         if(s!=null) modes.setSelection(Mode.visible.indexOf(s.mode.category))
         if(!centered && store.position!=null && map!=null) { centered=true; locate() }; fog.invalidate()
     }
+    private fun metricPanel(): LinearLayout {
+        val panel=LinearLayout(this); panel.orientation=LinearLayout.VERTICAL
+        listOf(listOf(Triple("km","КМ","location"),Triple("time","ВРЕМЯ","history"),Triple("speed","КМ/Ч","speed")),listOf(Triple("steps","ШАГИ","steps"),Triple("energy","ККАЛ ≈","fire"))).forEach { group ->
+            val row=LinearLayout(this)
+            group.forEach { (key,unit,kind) -> val cell=LinearLayout(this); cell.orientation=LinearLayout.VERTICAL; val value=text("—",24); value.typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); value.setSingleLine(); value.setAutoSizeTextTypeUniformWithConfiguration(14,24,1,android.util.TypedValue.COMPLEX_UNIT_SP); value.contentDescription=unit; metricValues[key]=value; cell.addView(value)
+                val caption=text(unit,10); caption.setTextColor(if(dark) Color.LTGRAY else Color.DKGRAY); val icon=navIcon(unit,kind) {}.drawable; icon.setBounds(0,0,dp(14),dp(14)); caption.setCompoundDrawables(icon,null,null,null); caption.compoundDrawablePadding=dp(5); cell.addView(caption); cell.setPadding(0,dp(3),dp(6),dp(10)); row.addView(cell,LinearLayout.LayoutParams(0,-2,1f)) }; panel.addView(row)
+        }; return panel
+    }
+    private fun annotationBitmap(discovery: Boolean): Bitmap {
+        val bitmap=Bitmap.createBitmap(dp(32),dp(40),Bitmap.Config.ARGB_8888); val c=Canvas(bitmap); c.scale(dp(32)/32f,dp(40)/40f); val paint=Paint(Paint.ANTI_ALIAS_FLAG); paint.color=if(discovery) Mode.car.color else accent
+        c.drawRoundRect(2f,2f,30f,32f,10f,10f,paint); val tail=Path(); tail.moveTo(12f,29f); tail.lineTo(16f,38f); tail.lineTo(20f,29f); tail.close(); c.drawPath(tail,paint)
+        paint.color=Color.WHITE; val glyph=Path()
+        if(discovery) { glyph.moveTo(16f,8f); glyph.lineTo(19f,14f); glyph.lineTo(25f,17f); glyph.lineTo(19f,20f); glyph.lineTo(16f,26f); glyph.lineTo(13f,20f); glyph.lineTo(7f,17f); glyph.lineTo(13f,14f) } else { glyph.moveTo(10f,9f); glyph.lineTo(22f,9f); glyph.lineTo(22f,26f); glyph.lineTo(16f,22f); glyph.lineTo(10f,26f) }; glyph.close(); c.drawPath(glyph,paint); return bitmap
+    }
     private fun navIcon(label: String, kind: String, action: () -> Unit): ImageButton = ImageButton(this).also { b ->
         b.contentDescription=label; b.setBackgroundColor(Color.TRANSPARENT); b.setPadding(dp(12),dp(12),dp(12),dp(12))
         b.setImageDrawable(object: android.graphics.drawable.Drawable() {
             val p=Paint(Paint.ANTI_ALIAS_FLAG).also { it.color=accent; it.strokeWidth=1.8f; it.style=Paint.Style.STROKE; it.strokeCap=Paint.Cap.ROUND }
             override fun draw(c: Canvas) { c.save(); c.translate(bounds.left.toFloat(),bounds.top.toFloat()); c.scale(bounds.width()/24f,bounds.height()/24f)
                 when(kind) {
+                    "plus" -> { c.drawLine(12f,4f,12f,20f,p); c.drawLine(4f,12f,20f,12f,p) }
+                    "close" -> { c.drawLine(6f,6f,18f,18f,p); c.drawLine(18f,6f,6f,18f,p) }
+                    "play" -> { val path=Path(); path.moveTo(7f,4f); path.lineTo(21f,12f); path.lineTo(7f,20f); path.close(); c.drawPath(path,p) }
+                    "camera" -> { c.drawRoundRect(2f,6f,22f,21f,3f,3f,p); c.drawCircle(12f,13f,4f,p); c.drawLine(7f,3f,17f,3f,p) }
+                    "fire" -> { val path=Path(); path.moveTo(12f,2f); path.cubicTo(18f,10f,22f,12f,19f,18f); path.cubicTo(16f,24f,6f,23f,5f,16f); path.cubicTo(4f,11f,9f,8f,10f,5f); path.lineTo(11f,12f); path.close(); c.drawPath(path,p) }
+                    "steps" -> { c.drawOval(4f,3f,10f,13f,p); c.drawOval(14f,10f,20f,20f,p); c.drawLine(5f,16f,9f,16f,p); c.drawLine(15f,23f,19f,23f,p) }
+                    "speed" -> { c.drawArc(3f,4f,21f,22f,150f,240f,false,p); c.drawLine(12f,14f,17f,8f,p); c.drawCircle(12f,14f,2f,p) }
                     "history" -> { c.drawCircle(12f,12f,8f,p); c.drawLine(12f,7f,12f,12f,p); c.drawLine(12f,12f,16f,14f,p) }
                     "location" -> { val path=Path(); path.moveTo(20f,4f); path.lineTo(14f,21f); path.lineTo(10f,14f); path.lineTo(3f,10f); path.close(); c.drawPath(path,p) }
                     "profile" -> { c.drawCircle(12f,8f,4f,p); c.drawArc(4f,13f,20f,27f,180f,180f,false,p) }
@@ -159,7 +194,7 @@ class MainActivity: Activity(), LocationListener {
         root.addView(scroll,FrameLayout.LayoutParams(-1,-1)); pages.add(scroll); scroll.alpha=0f; scroll.animate().alpha(1f).setDuration(180).start(); return column
     }
     private fun closePage(column: LinearLayout) { val scroll=column.parent as? ScrollView ?: return; disposePage(scroll); root.removeView(scroll); pages.remove(scroll) }
-    private fun disposePage(scroll: ScrollView) { routeTasks.remove(scroll)?.let { handler.removeCallbacks(it) }; routeMaps.remove(scroll)?.let { it.onPause(); it.onStop(); it.onDestroy() } }
+    private fun disposePage(scroll: ScrollView) { videos.remove(scroll)?.stopPlayback(); routeTasks.remove(scroll)?.let { handler.removeCallbacks(it) }; routeMaps.remove(scroll)?.let { it.onPause(); it.onStop(); it.onDestroy() } }
     private fun closePages() { pages.forEach { disposePage(it); root.removeView(it) }; pages.clear() }
     @Deprecated("Back navigation compatibility") override fun onBackPressed() { if(gate) { finish(); return }; if(pages.isNotEmpty()) { val last=pages.removeAt(pages.lastIndex); disposePage(last); root.removeView(last) } else super.onBackPressed() }
     private fun row(page: LinearLayout,title: String, detail: String="", color: Int=accent, action: () -> Unit) {
@@ -169,7 +204,7 @@ class MainActivity: Activity(), LocationListener {
     }
     private fun entryPage(title: String): LinearLayout { closePages(); val p=page(title); (p.getChildAt(0) as LinearLayout).getChildAt(1).visibility=View.GONE; return p }
     private fun field(p: LinearLayout,hint: String,type: Int=android.text.InputType.TYPE_CLASS_TEXT): EditText {
-        val f=EditText(this); f.hint=hint; f.contentDescription=hint; f.inputType=type; f.setTextColor(if(dark) Color.WHITE else Color.BLACK); f.setHintTextColor(Color.GRAY); f.setPadding(dp(12),dp(12),dp(12),dp(12)); p.addView(f); return f
+        val f=EditText(this); f.hint=hint; f.contentDescription=hint; f.inputType=type; f.setTextColor(if(dark) Color.WHITE else Color.BLACK); f.setHintTextColor(Color.GRAY); f.textSize=17f; f.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); f.setPadding(dp(18),dp(16),dp(18),dp(16)); p.addView(f,LinearLayout.LayoutParams(-1,-2).also { it.topMargin=dp(12) }); return f
     }
     private fun welcome() {
         val p=entryPage("TERRA ↗"); p.addView(text("Мир становится твоим шаг за шагом.",32)); p.addView(text("Открывай карту прогулками, сохраняй места и находи свой ритм.",18))
@@ -220,6 +255,7 @@ class MainActivity: Activity(), LocationListener {
         listOf("Неоткрытые участки" to "showFog","Мои места" to "showPlaces").forEach { (title,key) ->
             val toggle=Switch(this); toggle.text=title; toggle.textSize=17f; toggle.setTextColor(if(dark) Color.WHITE else Color.BLACK); toggle.setPadding(0,dp(14),0,dp(14)); toggle.isChecked=getPreferences(0).getBoolean(key,true); toggle.setOnCheckedChangeListener { _,checked -> getPreferences(0).edit().putBoolean(key,checked).apply(); fog.invalidate() }; p.addView(toggle)
         }
+        row(p,"Убрать найденные точки") { nearbyMarkers.forEach { map?.removeMarker(it) }; nearbyMarkers.clear() }
         row(p,"Неизведанное рядом","Найти ещё не открытые участки") { nearby() }
         row(p,"Все способы",if(layer==null) "Выбрано" else "") { layer=null; fog.invalidate(); closePage(p) }
         Mode.visible.forEach { m -> row(p,m.title,if(layer==m) "Выбран" else "",m.color) { layer=m; fog.invalidate(); closePage(p) } }
@@ -229,8 +265,14 @@ class MainActivity: Activity(), LocationListener {
         if(store.sessions.isEmpty()) p.addView(text("Первый маршрут ещё впереди. Начни прогулку — здесь останется её история.",21))
         store.sessions.filter { mode==null || it.mode.category==mode }.reversed().forEach { s -> row(p,"${s.mode.title} · %.2f км".format(s.distance()/1000),"${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(s.startedAt))}\n${s.duration()/60} мин · Открыть карту",s.mode.color) { replay(s) } }
     }
+    private fun mapSettings() {
+        val p=page("Карта"); row(p,"OpenStreetMap","Схема · текущая карта") {}
+        row(p,"Яндекс Карты","Нужны ключ MapKit и подключение SDK") { alert("Открой developer.tech.yandex.ru → Подключить API → MapKit — мобильный SDK. Создай ключ для Terra. После добавления ключа подключим SDK; сейчас используется OpenStreetMap.") }
+        row(p,"Google Maps","Схема и спутник после подключения SDK") { alert("Нужен проект Google Cloud с Maps SDK for Android, API-ключом и настройкой биллинга. Ключ ограничивается пакетом app.terra.explore и сертификатом приложения.") }
+        p.addView(text("Apple Maps в этой нативной Android-версии недоступна. Для спутника сначала нужно подключить провайдера, который его предоставляет.",15))
+    }
     private fun settings() {
-        val p=page("Настройки"); p.addView(text("Внешний вид",18))
+        val p=page("Настройки"); row(p,"Карта","Провайдер и вид карты") { mapSettings() }; p.addView(text("Внешний вид",18))
         listOf("Как на телефоне","Светлая","Тёмная").forEachIndexed { i,name -> row(p,name,if(getPreferences(0).getInt("theme",0)==i) "Выбрана" else "") { getPreferences(0).edit().putInt("theme",i).apply(); recreate() } }
         row(p,"Геопозиция","Разрешения и работа в фоне") { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName"))) }
         p.addView(text("Запись включается сразу. Пока GPS уточняется, неточные координаты не сохраняются. Не останавливай Terra принудительно во время прогулки.\n\nКарта: OpenStreetMap. Яндекс Карты требуют ключа MapKit.\nTerra · 2.1\nМаршруты и места хранятся на этом телефоне.",15))
@@ -329,7 +371,7 @@ class MainActivity: Activity(), LocationListener {
                 if("$row:$col" !in cells && found.size<6) found.add(Point(lat,lng,0,0.0))
             }
             runOnUiThread { if(found.isEmpty()) p.addView(text("Рядом всё исследовано. Попробуй из другого места.",18))
-                found.forEach { target -> row(p,"Неоткрытый участок","${pos.distance(target).toInt()} м от тебя") { following=false; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(target.lat,target.lng),16.0)); map?.addMarker(org.maplibre.android.annotations.MarkerOptions().position(LatLng(target.lat,target.lng)).title("Неоткрытый участок")); closePages() } }
+                found.forEach { target -> row(p,"Неоткрытый участок","${pos.distance(target).toInt()} м от тебя") { following=false; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(target.lat,target.lng),16.0)); map?.addMarker(org.maplibre.android.annotations.MarkerOptions().position(LatLng(target.lat,target.lng)).title("Неоткрытый участок").icon(org.maplibre.android.annotations.IconFactory.getInstance(this).fromBitmap(annotationBitmap(true))))?.let { nearbyMarkers.add(it) }; closePages() } }
             }
         }.start()
     }
@@ -338,6 +380,7 @@ class MainActivity: Activity(), LocationListener {
         p.addView(text(s.mode.title+" · "+java.text.DateFormat.getDateTimeInstance().format(java.util.Date(s.startedAt)),16))
         p.addView(text("%.2f км · %d мин".format(s.distance()/1000,s.duration()/60),28))
         p.addView(text("≈ %.0f активных ккал".format(ActivityMetrics.calories(s,personal().optDouble("weight"))),16))
+        p.addView(text("Шаги: "+(s.steps?.toString() ?: "—"),16))
         val preview=MapView(this); preview.onCreate(null); p.addView(preview,LinearLayout.LayoutParams(-1,dp(420))); routeMaps[scroll]=preview; preview.onStart(); preview.onResume()
         preview.setOnTouchListener { v,event -> v.parent.requestDisallowInterceptTouchEvent(event.action!=MotionEvent.ACTION_UP && event.action!=MotionEvent.ACTION_CANCEL); false }
         preview.getMapAsync { route ->
@@ -378,33 +421,55 @@ class MainActivity: Activity(), LocationListener {
         } catch(e: Exception) { alert("Не удалось открыть место"); return true }
     }
     private fun placeDetails(place: org.json.JSONObject) {
-        val p=page("Место"); p.addView(text(place.optString("note").ifBlank { "Моё место" },26))
-        val path=place.optString("photo"); if(path.isNotBlank()) { val image=ImageView(this); image.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,path).path)); image.scaleType=ImageView.ScaleType.FIT_CENTER; p.addView(image,LinearLayout.LayoutParams(-1,dp(240))) }
+        val p=page("Место"); p.addView(text(PlaceMedia.title(place),26)); if(place.optString("title").isNotBlank()) p.addView(text(place.optString("note"),17))
+        PlaceMedia.items(place).forEach { p.addView(mediaCard(it),LinearLayout.LayoutParams(-1,dp(240)).also { it.topMargin=dp(12) }) }
         row(p,"Показать на карте") { following=false; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(place.getDouble("lat"),place.getDouble("lng")),16.0)); closePages() }
         row(p,"Редактировать") { markPlace(LatLng(place.getDouble("lat"),place.getDouble("lng")),place) }
         row(p,"Удалить место") { val confirm=page("Удалить место?"); confirm.addView(text("Заметка исчезнет из твоих мест и с карты.",18)); row(confirm,"Удалить") { try { val old=savedPlaces(); val next=org.json.JSONArray(); for(i in 0 until old.length()) if(old.getJSONObject(i).getString("id")!=place.getString("id")) next.put(old.getJSONObject(i)); val data=personal(); data.put("places",next); savePersonal(data); fog.invalidate(); closePages(); places() } catch(e: Exception) { alert("Не удалось удалить место") } } }
     }
     private fun markPlace(coordinate: LatLng,existing: org.json.JSONObject?=null) {
-        val p=page(if(existing==null) "Новое место" else "Редактировать место"); p.addView(text("Что хочется запомнить здесь?",18)); val note=EditText(this); note.setTextColor(if(dark) Color.WHITE else Color.BLACK); note.minLines=3; note.hint="Заметка"; note.setText(existing?.optString("note") ?: ""); p.addView(note)
-        selectedPhoto=existing?.optString("photo")?.takeIf { it.isNotBlank() }; val preview=ImageView(this); preview.adjustViewBounds=true; preview.visibility=View.GONE; p.addView(preview,LinearLayout.LayoutParams(-1,dp(180))); photoPreview=preview
-        selectedPhoto?.let { preview.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,it).path)); preview.visibility=View.VISIBLE }
-        row(p,"Убрать фото") { selectedPhoto=null; preview.setImageDrawable(null); preview.visibility=View.GONE }
-        row(p,"Добавить фото") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),40) }
-        row(p,"Сохранить место") { try {
-            val data=personal(); val places=savedPlaces(); val place=org.json.JSONObject().put("id",existing?.getString("id") ?: java.util.UUID.randomUUID().toString()).put("lat",coordinate.latitude).put("lng",coordinate.longitude).put("note",note.text.toString().take(2000)).put("photo",selectedPhoto)
-            if(existing==null) places.put(place) else { for(i in 0 until places.length()) if(places.getJSONObject(i).getString("id")==existing.getString("id")) places.put(i,place) }; data.put("places",places); savePersonal(data); fog.invalidate(); closePages(); placeDetails(place)
-        } catch(e: Exception) { alert("Не удалось сохранить место") } }
+        val p=page(if(existing==null) "Новое место" else "Редактировать место")
+        val title=field(p,"Название места"); title.setText(existing?.optString("title") ?: "")
+        p.addView(text("Описание",15)); val note=field(p,"Что хочется запомнить здесь?",android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE); note.minLines=4; note.gravity=Gravity.TOP; note.setText(existing?.optString("note") ?: "")
+        editingMedia.clear(); if(existing!=null) editingMedia.addAll(PlaceMedia.items(existing)); mediaBusy=false
+        val tools=LinearLayout(this); tools.addView(navIcon("Фото и видео из галереи","plus") { if(editingMedia.size<12 && !mediaBusy) startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("image/*","video/*")).putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true).addCategory(Intent.CATEGORY_OPENABLE),40) }); tools.addView(navIcon("Сделать фото","camera") { capturePlacePhoto() }); p.addView(tools)
+        p.addView(text("До 12 фото и видео. Видео — до 100 МБ.",13)); val gallery=LinearLayout(this); gallery.orientation=LinearLayout.VERTICAL; mediaGallery=gallery; p.addView(gallery); renderMedia()
+        row(p,"Сохранить место") {
+            if(mediaBusy) alert("Дождись загрузки файлов") else try {
+                val data=personal(); val list=savedPlaces(); val place=org.json.JSONObject().put("id",existing?.getString("id") ?: java.util.UUID.randomUUID().toString()).put("lat",coordinate.latitude).put("lng",coordinate.longitude).put("title",title.text.toString().trim().take(100)).put("note",note.text.toString().take(4000)).put("media",org.json.JSONArray(editingMedia.toList()))
+                if(existing==null) list.put(place) else for(i in 0 until list.length()) if(list.getJSONObject(i).getString("id")==existing.getString("id")) list.put(i,place)
+                data.put("places",list); savePersonal(data); fog.invalidate(); closePages(); placeDetails(place)
+            } catch(e: Exception) { alert("Не удалось сохранить место") }
+        }
+    }
+    private fun capturePlacePhoto() {
+        if(mediaBusy || editingMedia.size>=12) return
+        try { val dir=java.io.File(filesDir,"media"); dir.mkdirs(); val file=java.io.File(dir,"camera-"+java.util.UUID.randomUUID()+".jpg"); cameraUri=androidx.core.content.FileProvider.getUriForFile(this,packageName+".media",file)
+            startActivityForResult(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).putExtra(android.provider.MediaStore.EXTRA_OUTPUT,cameraUri).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION),42)
+        } catch(e: Exception) { alert("Камера недоступна на этом устройстве") }
+    }
+    private fun renderMedia() { val gallery=mediaGallery ?: return; gallery.removeAllViews(); editingMedia.forEach { item -> val card=mediaCard(item); val remove=navIcon("Удалить вложение","close") { editingMedia.remove(item); renderMedia() }; remove.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); card.addView(remove,FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP or Gravity.END)); gallery.addView(card,LinearLayout.LayoutParams(-1,dp(240)).also { it.topMargin=dp(12) }) } }
+    private fun mediaCard(item: org.json.JSONObject): FrameLayout {
+        val card=FrameLayout(this); card.background=shape(if(dark) Color.rgb(32,34,42) else Color.WHITE); card.clipToOutline=true
+        val image=ImageView(this); image.scaleType=ImageView.ScaleType.FIT_CENTER; card.addView(image,FrameLayout.LayoutParams(-1,-1)); val file=java.io.File(filesDir,item.getString("file"))
+        if(item.optBoolean("video")) {
+            Thread { val retriever=android.media.MediaMetadataRetriever(); val bitmap=try { retriever.setDataSource(file.path); retriever.getFrameAtTime(0) } catch(e: Exception) { null } finally { retriever.release() }; runOnUiThread { image.setImageBitmap(bitmap) } }.start()
+            val play=navIcon("Смотреть видео","play") { val p=page("Видео"); val video=VideoView(this); videos[p.parent as ScrollView]=video; p.addView(video,LinearLayout.LayoutParams(-1,dp(460))); val controls=MediaController(this); controls.setAnchorView(video); video.setMediaController(controls); video.setVideoPath(file.path); video.setOnPreparedListener { video.start() }; video.addOnAttachStateChangeListener(object: View.OnAttachStateChangeListener { override fun onViewAttachedToWindow(v: View) {} ; override fun onViewDetachedFromWindow(v: View) { video.stopPlayback() } }) }; card.addView(play,FrameLayout.LayoutParams(dp(64),dp(64),Gravity.CENTER))
+        } else image.setImageBitmap(BitmapFactory.decodeFile(file.path))
+        return card
     }
     private fun places() {
         val p=page("Мои места"); val places=try { savedPlaces() } catch(e: Exception) { alert("Не удалось прочитать места"); return }
         if(places.length()==0) p.addView(text("Удерживай карту, чтобы добавить заметку или фото.",20))
         for(i in 0 until places.length()) { val place=places.getJSONObject(i)
-            val path=place.optString("photo"); if(path.isNotEmpty()) { val image=ImageView(this); image.setImageBitmap(BitmapFactory.decodeFile(java.io.File(filesDir,path).path)); image.scaleType=ImageView.ScaleType.CENTER_CROP; p.addView(image,LinearLayout.LayoutParams(-1,dp(180))) }
-            row(p,place.optString("note").ifBlank { "Моё место" },"Открыть заметку") { placeDetails(place) }
+            PlaceMedia.items(place).firstOrNull()?.let { p.addView(mediaCard(it),LinearLayout.LayoutParams(-1,dp(200)).also { it.topMargin=dp(12) }) }
+            row(p,PlaceMedia.title(place),"Открыть заметку") { placeDetails(place) }
         }
     }
     override fun onActivityResult(request: Int,result: Int,data: Intent?) {
-        super.onActivityResult(request,result,data); if(request !in listOf(40,41) || result!=RESULT_OK) return; val uri=data?.data ?: return
+        super.onActivityResult(request,result,data)
+        if(request in listOf(40,42)) { if(result==RESULT_OK) { val uris=if(request==42) listOfNotNull(cameraUri) else data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data); val room=(12-editingMedia.size).coerceAtLeast(0); mediaBusy=true; val targetGallery=mediaGallery; Thread { val results=uris.take(room).map { runCatching { PlaceMedia.import(this,it) } }; runOnUiThread { mediaBusy=false; if(!isDestroyed && targetGallery===mediaGallery && targetGallery?.isAttachedToWindow==true) { editingMedia.addAll(results.mapNotNull { it.getOrNull() }); renderMedia(); if(results.any { it.isFailure }) alert("Не все файлы добавлены. Проверь формат и размер видео (до 100 МБ).") } } }.start() }; return }
+        if(request!=41 || result!=RESULT_OK) return; val uri=data?.data ?: return
         try {
             val options=BitmapFactory.Options().also { it.inJustDecodeBounds=true }; contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,options) }
             require(options.outWidth>0 && options.outHeight>0); options.inSampleSize=max(1,max(options.outWidth,options.outHeight)/1400); options.inJustDecodeBounds=false
@@ -414,20 +479,21 @@ class MainActivity: Activity(), LocationListener {
         } catch(e: Exception) { alert("Не удалось открыть фото") }
     }
     private fun alert(message: String) { page("Terra").addView(text(message,18)) }
-    override fun onLocationChanged(l: Location) { if(System.currentTimeMillis()-l.time !in -5000..30000) return; store.position=Point(l.latitude,l.longitude,l.time,l.accuracy.toDouble()); if(store.active?.pausedAt!=null || (store.active==null && store.pending==null)) store.message="GPS ±${l.accuracy.toInt()} м"; refresh() }
+    override fun onLocationChanged(l: Location) { if(System.currentTimeMillis()-l.time !in -5000..30000) return; if(l.time<(store.position?.t ?: 0)) return; store.position=Point(l.latitude,l.longitude,l.time,l.accuracy.toDouble()); if(l.hasSpeed()) store.liveSpeed.add(l.speed.toDouble(),if(l.hasSpeedAccuracy()) l.speedAccuracyMetersPerSecond.toDouble() else 2.5,l.time,100.0); if(store.active?.pausedAt!=null || (store.active==null && store.pending==null)) store.message="GPS ±${l.accuracy.toInt()} м"; refresh() }
     override fun onProviderEnabled(provider: String) {}
     override fun onProviderDisabled(provider: String) { store.message="Нет GPS. Включи геолокацию в настройках."; refresh() }
     @Deprecated("Required on Android 8–10")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onStart() { super.onStart(); mapView.onStart(); routeMaps.values.forEach { it.onStart() } }
     override fun onResume() { super.onResume(); mapView.onResume(); routeMaps.values.forEach { it.onResume() }; if(!gate) watch(); handler.post(tick) }
-    override fun onPause() { handler.removeCallbacks(tick); location.removeUpdates(this); routeMaps.values.forEach { it.onPause() }; mapView.onPause(); super.onPause() }
+    override fun onPause() { videos.values.forEach { it.pause() }; handler.removeCallbacks(tick); location.removeUpdates(this); routeMaps.values.forEach { it.onPause() }; mapView.onPause(); super.onPause() }
     override fun onStop() { routeMaps.values.forEach { it.onStop() }; mapView.onStop(); super.onStop() }
-    override fun onDestroy() { handler.removeCallbacksAndMessages(null); store.listeners.remove(refreshListener); routeMaps.values.forEach { it.onDestroy() }; routeMaps.clear(); mapView.onDestroy(); super.onDestroy() }
+    override fun onDestroy() { videos.values.forEach { it.stopPlayback() }; videos.clear(); handler.removeCallbacksAndMessages(null); store.listeners.remove(refreshListener); routeMaps.values.forEach { it.onDestroy() }; routeMaps.clear(); mapView.onDestroy(); super.onDestroy() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
     private inner class FogView(context: Context): View(context) {
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+        private val placeIcon=annotationBitmap(false)
         init { isClickable=false; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO; setLayerType(LAYER_TYPE_SOFTWARE,null) }
         override fun onTouchEvent(event: android.view.MotionEvent)=false
         override fun onDraw(canvas: Canvas) {
@@ -437,14 +503,15 @@ class MainActivity: Activity(), LocationListener {
             val sessions=store.sessions + listOfNotNull(store.active)
             for(s in sessions) { if(layer!=null && s.mode.category!=layer) continue
                 for((i,p) in s.points.withIndex()) {
+                    if(p.excludeDiscovery) continue
                     val xy=m.projection.toScreenLocation(LatLng(p.lat,p.lng)); val radius=(Discovery.radius/m.projection.getMetersPerPixelAtLatitude(p.lat)).toFloat()
                     canvas.drawCircle(xy.x,xy.y,radius,paint)
-                    if(i>0 && s.points[i-1].connects(p) && abs(p.lng-s.points[i-1].lng)<180) { val a=m.projection.toScreenLocation(LatLng(s.points[i-1].lat,s.points[i-1].lng)); paint.strokeWidth=radius*2; canvas.drawLine(a.x,a.y,xy.x,xy.y,paint) }
+                    if(i>0 && !s.points[i-1].excludeDiscovery && s.points[i-1].connects(p) && abs(p.lng-s.points[i-1].lng)<180) { val a=m.projection.toScreenLocation(LatLng(s.points[i-1].lat,s.points[i-1].lng)); paint.strokeWidth=radius*2; canvas.drawLine(a.x,a.y,xy.x,xy.y,paint) }
                 }
             }
             paint.xfermode=null; canvas.restoreToCount(save)
             val places=personal().optJSONArray("places") ?: org.json.JSONArray(); paint.color=accent
-            if(showPlaces) for(i in 0 until places.length()) { val place=places.getJSONObject(i); val xy=m.projection.toScreenLocation(LatLng(place.getDouble("lat"),place.getDouble("lng"))); canvas.drawCircle(xy.x,xy.y,dp(5).toFloat(),paint) }
+            if(showPlaces) for(i in 0 until places.length()) { val place=places.getJSONObject(i); val xy=m.projection.toScreenLocation(LatLng(place.getDouble("lat"),place.getDouble("lng"))); canvas.drawBitmap(placeIcon,xy.x-dp(16),xy.y-dp(38),paint) }
             store.position?.let { val p=m.projection.toScreenLocation(LatLng(it.lat,it.lng)); paint.color=Color.WHITE; canvas.drawCircle(p.x,p.y,dp(9).toFloat(),paint); paint.color=accent; canvas.drawCircle(p.x,p.y,dp(6).toFloat(),paint) }
         }
     }

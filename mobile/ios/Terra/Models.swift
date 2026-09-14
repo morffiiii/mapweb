@@ -15,7 +15,8 @@ struct TrackPoint: Codable {
     var t: Double
     var accuracy: Double
     var breakBefore: Bool?
-    enum CodingKeys: String, CodingKey { case lat, lng, t, accuracy; case breakBefore = "break" }
+    var excludeDiscovery: Bool?
+    enum CodingKeys: String, CodingKey { case lat, lng, t, accuracy, excludeDiscovery; case breakBefore = "break" }
     var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: lat, longitude: lng) }
     var valid: Bool { lat.isFinite && lng.isFinite && t.isFinite && accuracy.isFinite && abs(lat) <= 85 && abs(lng) <= 180 && accuracy >= 0 && accuracy <= 60 }
     func distance(to p: TrackPoint) -> Double {
@@ -38,6 +39,7 @@ struct TrackSession: Codable {
     var pausedMs: Double = 0
     var breakNext: Bool?
     var points: [TrackPoint] = []
+    var steps: Int?
     var lastRecordedAt: Double?
     var distance: Double {
         zip(points, points.dropFirst()).reduce(0) { $0 + ($1.0.connects(to: $1.1) ? $1.0.distance(to: $1.1) : 0) }
@@ -90,8 +92,9 @@ enum Discovery {
         }
         for session in sessions {
             for (i,p) in session.points.enumerated() {
+                if p.excludeDiscovery == true { continue }
                 stamp(p)
-                if i > 0, session.points[i-1].connects(to: p) {
+                if i > 0, session.points[i-1].excludeDiscovery != true, session.points[i-1].connects(to: p) {
                     let a = session.points[i-1], count = min(500, Int(ceil(a.distance(to: p)/15)))
                     var dlng = p.lng - a.lng
                     if dlng > 180 { dlng -= 360 }; if dlng < -180 { dlng += 360 }

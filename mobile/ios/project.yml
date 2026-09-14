@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '2.2.0'
-    CURRENT_PROJECT_VERSION: '4'
+    MARKETING_VERSION: '2.3.0'
+    CURRENT_PROJECT_VERSION: '5'
     CODE_SIGN_STYLE: Automatic
 targets:
   Terra:
@@ -21,6 +21,8 @@ targets:
         UILaunchScreen: {}
         NSLocationWhenInUseUsageDescription: 'Геопозиция показывает тебя на карте. После нажатия «Начать» Terra сохраняет маршрут и открывает пройденные участки.'
         NSLocationAlwaysAndWhenInUseUsageDescription: 'Начатый маршрут продолжает записываться при блокировке экрана. Заверши запись в Terra, чтобы остановить её.'
+        NSMotionUsageDescription: 'Terra считает шаги во время пешей прогулки.'
+        NSCameraUsageDescription: 'Сделай фото для своего места на карте.'
         UIBackgroundModes: [location]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true

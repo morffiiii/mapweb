@@ -7,7 +7,7 @@ final class WelcomeController: UIViewController {
         let p = TerraPage(title,dismissible: false); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth,.flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self); return p
     }
     private func input(_ p: TerraPage,_ hint: String,keyboard: UIKeyboardType = .default,secure: Bool = false) -> UITextField {
-        let f = UITextField(); f.placeholder = hint; f.accessibilityIdentifier = hint; f.keyboardType = keyboard; f.isSecureTextEntry = secure; f.autocapitalizationType = .none; f.autocorrectionType = .no; f.borderStyle = .roundedRect; f.heightAnchor.constraint(equalToConstant: 52).isActive = true; p.content.addArrangedSubview(f); return f
+        let f = TerraInput(); f.placeholder = hint; f.accessibilityIdentifier = hint; f.keyboardType = keyboard; f.isSecureTextEntry = secure; f.autocapitalizationType = .none; f.autocorrectionType = .no; f.borderStyle = .none; f.heightAnchor.constraint(equalToConstant: 56).isActive = true; p.content.addArrangedSubview(f); return f
     }
     private func welcome() {
         let p = page("TERRA ↗"); p.text("Мир становится твоим шаг за шагом.",large: true); p.text("Открывай карту прогулками, сохраняй места и находи свой ритм.")

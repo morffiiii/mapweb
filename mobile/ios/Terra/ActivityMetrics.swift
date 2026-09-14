@@ -12,7 +12,7 @@ enum ActivityMetrics {
         guard session.mode.category == .walk || session.mode.category == .bike else { return 0 }
         let kg = weight.flatMap { $0.isFinite && (10...400).contains($0) ? $0 : nil } ?? 70
         return zip(session.points,session.points.dropFirst()).reduce(0) { total,pair in
-            let (a,b) = pair; guard a.connects(to: b) else { return total }
+            let (a,b) = pair; guard a.excludeDiscovery != true, b.excludeDiscovery != true, a.connects(to: b) else { return total }
             let seconds = (b.t-a.t)/1000, kmh = a.distance(to: b)/seconds*3.6
             guard kmh >= 0.5 else { return total }
             let met: Double

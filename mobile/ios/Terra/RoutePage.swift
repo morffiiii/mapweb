@@ -10,9 +10,11 @@ final class RoutePage: TerraPage, MKMapViewDelegate {
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
         super.viewDidLoad()
+        routeMap.mapType = [.standard,.satellite,.hybrid][min(2,UserDefaults.standard.integer(forKey: "mapStyle"))]
         text(session.mode.title + " · " + Date(timeIntervalSince1970: session.startedAt/1000).formatted(date: .abbreviated, time: .shortened))
         text(String(format: "%.2f км · %d мин", session.distance/1000, Int(session.duration()/60)), large: true)
         text(String(format: "≈ %.0f активных ккал", ActivityMetrics.calories(session, weight: PersonalStore.shared.data.weight)))
+        text("Шаги: \(session.steps.map(String.init) ?? "—")")
         routeMap.delegate = self; routeMap.layer.cornerRadius = 24; routeMap.clipsToBounds = true
         routeMap.accessibilityIdentifier = "historyRouteMap"; routeMap.heightAnchor.constraint(equalToConstant: 420).isActive = true; content.addArrangedSubview(routeMap)
         if session.points.isEmpty { text("В этой записи нет точных координат GPS."); return }

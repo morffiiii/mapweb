@@ -1,7 +1,13 @@
 import Foundation
 import CoreLocation
 
-struct Place: Codable { var id = UUID().uuidString; var lat: Double; var lng: Double; var note: String; var photo: String? }
+struct PlaceMedia: Codable { var id = UUID().uuidString; var file: String; var video = false }
+struct Place: Codable {
+    var id = UUID().uuidString; var lat: Double; var lng: Double; var note: String; var photo: String?
+    var title: String?; var media: [PlaceMedia]?
+    var displayTitle: String { title?.isEmpty == false ? title! : note.isEmpty ? "Моё место" : String(note.prefix(70)) }
+    var attachments: [PlaceMedia] { media ?? photo.map { [PlaceMedia(file: $0)] } ?? [] }
+}
 struct Territory: Codable { var lat: Double; var lng: Double; var radius: Double = 500 }
 struct PersonalGoal: Codable { var id = UUID().uuidString; var title: String; var kind: String; var target: Double }
 struct StreakRestore: Codable { var day: String; var usedOn: String }

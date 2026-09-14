@@ -11,6 +11,12 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
     private(set) var pendingMode: TravelMode?
     private var resumePending = false
     private let manager = CLLocationManager()
+    private let stepRecorder = StepRecorder()
+    private var liveSpeed = LiveSpeed()
+    private var modeGuard = ModeSpeedGuard()
+    var modeWarning: String? { !modeGuard.allowsDiscovery && recording ? (modeGuard.warning ? "Скорость не соответствует режиму · открытие приостановлено" : "Проверяем скорость · открытие приостановлено") : nil }
+    var speed: Double? { recording ? liveSpeed.value(now: now) : 0 }
+    var stepsAvailable: Bool { stepRecorder.available }
     private var durableState = TrackState()
     private var visible = true
     private var errorMessage: String?
@@ -70,7 +76,7 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
     private func configureLocation() {
         guard authorized, !blocked else { return }
         manager.allowsBackgroundLocationUpdates = recording
-        manager.distanceFilter = recording && state.active?.points.isEmpty == false ? 4 : kCLDistanceFilterNone
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.activityType = (state.active?.mode == .car || state.active?.mode == .moto) ? .automotiveNavigation : .fitness
         if visible || recording { manager.startUpdatingLocation() } else { manager.stopUpdatingLocation() }
     }
@@ -99,9 +105,20 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
             state.active = TrackSession(mode: mode, startedAt: time, points: points)
         }
         pendingMode = nil; resumePending = false
-        do { try persist(); configureLocation(); message = state.active?.points.isEmpty == true ? "Запись начата · уточняем GPS…" : "Маршрут записывается" } catch { return }
+        do { try persist(); liveSpeed.reset(); modeGuard = ModeSpeedGuard(); startSteps(); configureLocation(); message = state.active?.points.isEmpty == true ? "Запись начата · уточняем GPS…" : "Маршрут записывается" } catch { return }
+    }
+    private func startSteps() {
+        guard let session = state.active, session.mode == .walk else { return }
+        let id = session.id
+        stepRecorder.start { [weak self] delta in
+            guard let self else { return }
+            if self.state.active?.id == id { self.state.active?.steps = (self.state.active?.steps ?? 0)+delta }
+            else if let i = self.state.sessions.firstIndex(where: { $0.id == id }) { self.state.sessions[i].steps = (self.state.sessions[i].steps ?? 0)+delta }
+            do { try self.persist(); self.notify() } catch { self.stepRecorder.stop() }
+        }
     }
     func pause() {
+        stepRecorder.stop(); liveSpeed.reset()
         cancelPending()
         guard recording else { return }
         state.active?.pausedAt = now; state.active?.lastRecordedAt = now
@@ -109,6 +126,7 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
         configureLocation(); notify()
     }
     func finish() {
+        stepRecorder.stop(); liveSpeed.reset()
         guard var session = state.active else { return }
         pendingMode = nil; resumePending = false
         if let paused = session.pausedAt { session.pausedMs += now-paused }
@@ -147,11 +165,14 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
             guard CLLocationCoordinate2DIsValid(location.coordinate), abs(location.coordinate.latitude) <= 85,
                   location.horizontalAccuracy >= 0, location.timestamp.timeIntervalSinceNow > -30,
                   location.timestamp.timeIntervalSinceNow < 5 else { continue }
+            if let previous = position, location.timestamp <= previous.timestamp { continue }
             position = location; fulfillPending()
+            if recording { liveSpeed.add(metersPerSecond: location.speed,accuracy: location.speedAccuracy,time: location.timestamp.timeIntervalSince1970*1000,maximum: 100)
+                if location.speed >= 0, location.speedAccuracy >= 0, location.speedAccuracy <= 3, let mode = state.active?.mode { modeGuard.update(kmh: location.speed*3.6,time: location.timestamp.timeIntervalSince1970*1000,mode: mode) } }
             if recording, var session = state.active {
                 let p = TrackPoint(lat: location.coordinate.latitude, lng: location.coordinate.longitude,
                                    t: location.timestamp.timeIntervalSince1970*1000, accuracy: location.horizontalAccuracy,
-                                   breakBefore: session.breakNext)
+                                   breakBefore: session.breakNext,excludeDiscovery: !modeGuard.allowsDiscovery)
                 if p.t >= session.startedAt, p.accepts(after: session.points.last, mode: session.mode) {
                     session.points.append(p); session.breakNext = false; session.lastRecordedAt = p.t; state.active = session
                     do { try persist() } catch { break }
