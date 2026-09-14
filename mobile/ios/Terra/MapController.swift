@@ -42,7 +42,7 @@ final class FogRenderer: MKOverlayRenderer {
     }
 }
 
-final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewControllerDelegate {
+final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewControllerDelegate, UIGestureRecognizerDelegate {
     private let map = MKMapView()
     private let engine = TrackingEngine.shared
     private let dashboard = MetricPanel()
@@ -57,6 +57,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     private var showPlaces: Bool { UserDefaults.standard.object(forKey: "showPlaces") as? Bool ?? true }
     private var nearbyPins: [MKPointAnnotation] = []
     private var photoHandler: ((UIImage) -> Void)?
+    private lazy var placeGesture = UILongPressGestureRecognizer(target: self,action: #selector(markPlace(_:)))
     private var selectedMode: TravelMode { TravelMode.allCases[max(0, modes.selectedSegmentIndex)] }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -68,7 +69,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         map.delegate = self; map.showsUserLocation = true; map.pointOfInterestFilter = .excludingAll
         map.accessibilityIdentifier = "nativeMap"
         map.isAccessibilityElement = true; map.accessibilityLabel = "Карта открытий"; map.accessibilityTraits = .allowsDirectInteraction
-        map.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(markPlace(_:))))
+        placeGesture.delegate = self; placeGesture.minimumPressDuration = 0.6; placeGesture.cancelsTouchesInView = false; map.addGestureRecognizer(placeGesture)
         refreshPlaces()
         let top = UIStackView(); top.axis = .horizontal; top.distribution = .equalSpacing
         let title = UILabel(); title.text = "TERRA ↗"; title.font = .systemFont(ofSize: 27, weight: .black)
@@ -385,6 +386,9 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     @objc private func markPlace(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }; let coordinate = map.convert(gesture.location(in: map), toCoordinateFrom: map)
         editPlace(Place(lat: coordinate.latitude,lng: coordinate.longitude,note: ""),isNew: true)
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === placeGesture || otherGestureRecognizer === placeGesture
     }
     private func editPlace(_ original: Place, isNew: Bool = false) {
         let p = PlaceEditor(original,isNew: isNew) { [weak self] place in self?.refreshPlaces(); self?.closePages(); self?.placeDetails(place) }

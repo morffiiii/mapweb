@@ -25,7 +25,7 @@ final class MapTests: XCTestCase {
         expectation(for: NSPredicate(format: "label BEGINSWITH 'GPS'"), evaluatedWith: gps)
         waitForExpectations(timeout: 30)
         capture(app, "01-map")
-        nativeMap.coordinate(withNormalizedOffset: CGVector(dx: 0.5,dy: 0.38)).press(forDuration: 1.2)
+        nativeMap.coordinate(withNormalizedOffset: CGVector(dx: 0.25,dy: 0.4)).press(forDuration: 1.2)
         let placeTitle = app.textFields["placeTitle"]
         XCTAssertTrue(placeTitle.waitForExistence(timeout: 10)); placeTitle.tap(); placeTitle.typeText("Тестовое место")
         let description = app.textViews["Описание места"]; description.tap(); description.typeText("Заметка с удобными отступами")
