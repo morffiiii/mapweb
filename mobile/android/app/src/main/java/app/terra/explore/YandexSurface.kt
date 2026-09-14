@@ -18,12 +18,15 @@ class YandexSurface(context: Context): FrameLayout(context) {
     var onTap: ((LatLng) -> Unit)? = null
     var onCamera: (() -> Unit)? = null
     var onGesture: (() -> Unit)? = null
+    private var pendingMove: Pair<LatLng,Double>? = null
+    private var loaded=false
+    private val loadedListener=MapLoadedListener { loaded=true; applyPendingMove() }
     var route: Session? = null
     var routeCount = Int.MAX_VALUE
         set(value) { field=value; ink.invalidate() }
     private val cameraListener = CameraListener { _, _, reason, _ ->
         ink.invalidate(); onCamera?.invoke()
-        if(reason==CameraUpdateReason.GESTURES) onGesture?.invoke()
+        if(reason==CameraUpdateReason.GESTURES) { pendingMove=null; onGesture?.invoke() }
     }
     private val inputListener = object: InputListener {
         override fun onMapTap(map: com.yandex.mapkit.map.Map, point: YPoint) { onTap?.invoke(LatLng(point.latitude,point.longitude)) }
@@ -49,6 +52,8 @@ class YandexSurface(context: Context): FrameLayout(context) {
         addView(native,LayoutParams(-1,-1)); addView(ink,LayoutParams(-1,-1))
         native.mapWindow.map.addCameraListener(java.lang.ref.WeakReference(cameraListener))
         native.mapWindow.map.addInputListener(java.lang.ref.WeakReference<InputListener>(inputListener))
+        native.mapWindow.map.setMapLoadedListener(java.lang.ref.WeakReference(loadedListener))
+        native.addOnLayoutChangeListener { _,_,_,_,_,_,_,_,_ -> applyPendingMove() }
         native.mapWindow.map.isTiltGesturesEnabled=false
         native.mapWindow.map.logo.setAlignment(com.yandex.mapkit.logo.Alignment(com.yandex.mapkit.logo.HorizontalAlignment.LEFT,com.yandex.mapkit.logo.VerticalAlignment.BOTTOM))
     }
@@ -56,6 +61,13 @@ class YandexSurface(context: Context): FrameLayout(context) {
     fun stop() { native.onStop() }
     fun night(dark: Boolean) { native.mapWindow.map.isNightModeEnabled=dark }
     fun move(point: LatLng, zoom: Double=15.5) {
+        pendingMove=point to zoom
+        applyPendingMove()
+    }
+    private fun applyPendingMove() {
+        val (point,zoom)=pendingMove ?: return
+        if(native.width<=0 || native.height<=0 || !isAttachedToWindow) return
+        if(loaded) pendingMove=null
         native.mapWindow.map.move(CameraPosition(YPoint(point.latitude,point.longitude),zoom.toFloat(),0f,0f),Animation(Animation.Type.SMOOTH,0.35f),null)
     }
     fun screen(point: LatLng): PointF {
