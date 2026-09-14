@@ -185,6 +185,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
             }
         }
         p.text("Маршрут начинает записываться сразу. Если GPS ещё уточняется, первые точные координаты добавятся автоматически. Не закрывай Terra смахиванием во время записи.")
+        p.action("Шаги",detail: "Разрешение движения и фитнеса",icon: "shoeprints.fill") { [weak self] in self?.page("Шаги").text("Шаги считаются датчиком во время пешего маршрута. На паузе счётчик останавливается. Если показано «—», проверь разрешение «Движение и фитнес» в настройках телефона. На устройстве без датчика шаги недоступны.") }
         p.action("Геопозиция", icon: "location.fill") { [weak self] in self?.settingsPermission() }
         p.text("Карта: Apple Maps. Подключение Яндекс Карт требует ключа MapKit.\nTerra · 2.1\nМаршруты и личные места хранятся на этом телефоне.")
     }
@@ -372,7 +373,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     private func placeDetails(_ place: Place) {
         let p = page("Место")
         p.text(place.displayTitle,large: true)
-        if place.title?.isEmpty == false { p.text(place.note) }
+        if place.title?.isEmpty == false || place.note != place.displayTitle { p.text(place.note) }
         for item in place.attachments { p.content.addArrangedSubview(MediaCard(item,presenter: p)) }
         p.action("Показать на карте",icon: "map") { [weak self] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat,longitude: place.lng),latitudinalMeters: 700,longitudinalMeters: 700),animated: true); self?.closePages() }
         p.action("Редактировать",icon: "pencil") { [weak self] in self?.editPlace(place) }

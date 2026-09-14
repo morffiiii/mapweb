@@ -130,7 +130,7 @@ class MainActivity: Activity(), LocationListener {
     private fun command(action: String) { startService(Intent(this,TrackingService::class.java).setAction(action)) }
     private fun refresh() {
         if(!::status.isInitialized) return
-        status.text=if(store.active?.pausedAt==null && store.active!=null && !store.modeGuard.allowsDiscovery) "Скорость не соответствует режиму · открытие приостановлено" else store.message
+        status.text=if(store.active?.pausedAt==null && store.active!=null && !store.modeGuard.allowsDiscovery) (if(store.modeGuard.warning) "Скорость не соответствует режиму · открытие приостановлено" else "Проверяем скорость · открытие приостановлено") else store.message
         dashboard.visibility=if(store.active==null) View.GONE else View.VISIBLE
         metric.visibility=if(store.active==null) View.VISIBLE else View.GONE
         modes.visibility=if(store.active==null) View.VISIBLE else View.GONE
@@ -274,6 +274,7 @@ class MainActivity: Activity(), LocationListener {
     private fun settings() {
         val p=page("Настройки"); row(p,"Карта","Провайдер и вид карты") { mapSettings() }; p.addView(text("Внешний вид",18))
         listOf("Как на телефоне","Светлая","Тёмная").forEachIndexed { i,name -> row(p,name,if(getPreferences(0).getInt("theme",0)==i) "Выбрана" else "") { getPreferences(0).edit().putInt("theme",i).apply(); recreate() } }
+        row(p,"Шаги","Датчик и разрешение физической активности") { alert("Шаги считаются датчиком во время пешего маршрута. Если показано «—», проверь разрешение физической активности в настройках Terra. На устройстве без датчика шаги недоступны.") }
         row(p,"Геопозиция","Разрешения и работа в фоне") { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName"))) }
         p.addView(text("Запись включается сразу. Пока GPS уточняется, неточные координаты не сохраняются. Не останавливай Terra принудительно во время прогулки.\n\nКарта: OpenStreetMap. Яндекс Карты требуют ключа MapKit.\nTerra · 2.1\nМаршруты и места хранятся на этом телефоне.",15))
     }
@@ -421,7 +422,7 @@ class MainActivity: Activity(), LocationListener {
         } catch(e: Exception) { alert("Не удалось открыть место"); return true }
     }
     private fun placeDetails(place: org.json.JSONObject) {
-        val p=page("Место"); p.addView(text(PlaceMedia.title(place),26)); if(place.optString("title").isNotBlank()) p.addView(text(place.optString("note"),17))
+        val p=page("Место"); p.addView(text(PlaceMedia.title(place),26)); if(place.optString("title").isNotBlank() || place.optString("note")!=PlaceMedia.title(place)) p.addView(text(place.optString("note"),17))
         PlaceMedia.items(place).forEach { p.addView(mediaCard(it),LinearLayout.LayoutParams(-1,dp(240)).also { it.topMargin=dp(12) }) }
         row(p,"Показать на карте") { following=false; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(place.getDouble("lat"),place.getDouble("lng")),16.0)); closePages() }
         row(p,"Редактировать") { markPlace(LatLng(place.getDouble("lat"),place.getDouble("lng")),place) }

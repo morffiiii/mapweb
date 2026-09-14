@@ -112,8 +112,8 @@ final class TrackingEngine: NSObject, CLLocationManagerDelegate {
         let id = session.id
         stepRecorder.start { [weak self] delta in
             guard let self else { return }
-            if self.state.active?.id == id { self.state.active?.steps = (self.state.active?.steps ?? 0)+delta }
-            else if let i = self.state.sessions.firstIndex(where: { $0.id == id }) { self.state.sessions[i].steps = (self.state.sessions[i].steps ?? 0)+delta }
+            if var session = self.state.active, session.id == id { session.steps = (session.steps ?? 0)+delta; self.state.active = session }
+            else if let i = self.state.sessions.firstIndex(where: { $0.id == id }) { var session = self.state.sessions[i]; session.steps = (session.steps ?? 0)+delta; self.state.sessions[i] = session }
             do { try self.persist(); self.notify() } catch { self.stepRecorder.stop() }
         }
     }
