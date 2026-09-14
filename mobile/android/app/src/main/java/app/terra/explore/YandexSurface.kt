@@ -47,7 +47,8 @@ class YandexSurface(context: Context): FrameLayout(context) {
     }
     init {
         addView(native,LayoutParams(-1,-1)); addView(ink,LayoutParams(-1,-1))
-        native.mapWindow.map.addCameraListener(cameraListener); native.mapWindow.map.addInputListener(inputListener)
+        native.mapWindow.map.addCameraListener(java.lang.ref.WeakReference(cameraListener))
+        native.mapWindow.map.addInputListener(java.lang.ref.WeakReference<InputListener>(inputListener))
         native.mapWindow.map.isTiltGesturesEnabled=false
     }
     fun start() { native.onStart() }
