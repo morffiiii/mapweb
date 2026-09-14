@@ -26,6 +26,11 @@ final class MapTests: XCTestCase {
         waitForExpectations(timeout: 30)
         expectation(for: NSPredicate(format: "label CONTAINS 'загружена'"),evaluatedWith: nativeMap)
         waitForExpectations(timeout: 60)
+        expectation(for: NSPredicate { _,_ in
+            let values = (nativeMap.value as? String ?? "").split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            return values.count == 2 && abs(values[0]-55.751244)<0.001 && abs(values[1]-37.618423)<0.001
+        },evaluatedWith: nil)
+        waitForExpectations(timeout: 15)
         capture(app, "01-map")
         nativeMap.coordinate(withNormalizedOffset: CGVector(dx: 0.25,dy: 0.4)).press(forDuration: 1.2)
         let placeTitle = app.textFields["placeTitle"]
