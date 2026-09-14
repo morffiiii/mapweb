@@ -25,6 +25,14 @@ final class MapTests: XCTestCase {
         expectation(for: NSPredicate(format: "label BEGINSWITH 'GPS'"), evaluatedWith: gps)
         waitForExpectations(timeout: 30)
         capture(app, "01-map")
+        nativeMap.coordinate(withNormalizedOffset: CGVector(dx: 0.5,dy: 0.38)).press(forDuration: 1.2)
+        let placeTitle = app.textFields["placeTitle"]
+        XCTAssertTrue(placeTitle.waitForExistence(timeout: 10)); placeTitle.tap(); placeTitle.typeText("Тестовое место")
+        let description = app.textViews["Описание места"]; description.tap(); description.typeText("Заметка с удобными отступами")
+        capture(app,"01-place-editor")
+        tap(app.buttons["Сохранить место"],in: app)
+        XCTAssertTrue(app.staticTexts["Тестовое место"].waitForExistence(timeout: 10))
+        app.buttons.matching(identifier: "Закрыть").firstMatch.tap()
         let initial = nativeMap.value as? String
         nativeMap.swipeLeft()
         let moved = NSPredicate { _,_ in (nativeMap.value as? String) != initial }
@@ -34,6 +42,10 @@ final class MapTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Демо"].exists)
         app.buttons["startRecording"].tap()
         XCTAssertTrue(app.buttons["Завершить"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["metric-km"].exists)
+        XCTAssertTrue(app.staticTexts["metric-energy"].exists)
+        XCTAssertFalse(app.segmentedControls["travelModes"].isHittable)
+        capture(app,"01-active-dashboard")
         app.buttons["startRecording"].tap()
         XCTAssertEqual(app.buttons["startRecording"].label, "Продолжить")
         app.buttons["Завершить"].tap()
