@@ -3,10 +3,13 @@ import MapKit
 import YandexMapsMobile
 
 /// Native map with a noninteractive exploration layer; GPS remains owned by TrackingEngine.
-final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener, YMKMapLoadedListener {
+final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener, YMKMapLoadedListener, UIGestureRecognizerDelegate {
     static var selected: Bool { UserDefaults.standard.string(forKey: "mapProvider") != "apple" }
     let native = YMKMapView(frame: .zero)!
     private let ink = YandexInk()
+    private var pendingMove: (CLLocationCoordinate2D,Double,Bool)?
+    private var loaded = false
+    private lazy var placePress = UILongPressGestureRecognizer(target: self,action: #selector(longPress(_:)))
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPlace: ((Place) -> Void)?
     var onGesture: (() -> Void)?
@@ -26,12 +29,21 @@ final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener, YM
         native.mapWindow.map.setMapLoadedListenerWith(self)
         native.mapWindow.map.logo.setAlignmentWith(YMKLogoAlignment(horizontalAlignment: .left,verticalAlignment: .bottom))
         native.mapWindow.map.isTiltGesturesEnabled = false
+        placePress.minimumPressDuration = 0.6; placePress.cancelsTouchesInView = false; placePress.delegate = self
+        native.addGestureRecognizer(placePress)
         accessibilityIdentifier = "nativeMap"; isAccessibilityElement = true
         accessibilityLabel = "Карта открытий"; accessibilityTraits = .allowsDirectInteraction
     }
     required init?(coder: NSCoder) { fatalError() }
-    override func layoutSubviews() { super.layoutSubviews(); native.frame = bounds; ink.frame = bounds; ink.setNeedsDisplay() }
+    override func layoutSubviews() { super.layoutSubviews(); native.frame = bounds; native.layoutIfNeeded(); ink.frame = bounds; ink.setNeedsDisplay(); applyPendingMove() }
     func move(_ coordinate: CLLocationCoordinate2D, meters: Double = 1000, animated: Bool = true) {
+        pendingMove = (coordinate,meters,animated)
+        applyPendingMove()
+    }
+    private func applyPendingMove() {
+        guard window != nil, native.mapWindow.width() > 0, native.mapWindow.height() > 0, let (coordinate,meters,animated) = pendingMove else { return }
+        // Retain the first camera request until the SDK's initial map has loaded.
+        if loaded { pendingMove = nil }
         let zoom = Float(max(2,min(19,log2(156543.03392 * cos(coordinate.latitude * .pi/180) * max(200,Double(bounds.width)) / meters))))
         native.mapWindow.map.move(with: YMKCameraPosition(target: YMKPoint(latitude: coordinate.latitude,longitude: coordinate.longitude),zoom: zoom,azimuth: 0,tilt: 0),animation: YMKAnimation(type: .smooth,duration: animated ? 0.35 : 0),cameraCallback: nil)
     }
@@ -52,12 +64,25 @@ final class YandexSurface: UIView, YMKMapInputListener, YMKMapCameraListener, YM
         }
         if let found = candidates.min(by: { $0.1 < $1.1 }), found.1 < 32 { onPlace?(found.0) }
     }
-    func onMapLongTap(with map: YMKMap, point: YMKPoint) { onLongPress?(CLLocationCoordinate2D(latitude: point.latitude,longitude: point.longitude)) }
-    func onMapLoaded(with statistics: YMKMapLoadStatistics) { accessibilityLabel = "Карта открытий · Яндекс · загружена" }
+    func onMapLongTap(with map: YMKMap, point: YMKPoint) { /* Handled by the native recognizer consistently at every zoom. */ }
+    @objc private func longPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        let p = gesture.location(in: native), scale = window?.screen.scale ?? UIScreen.main.scale
+        guard let point = native.mapWindow.screenToWorld(with: YMKScreenPoint(x: Float(p.x*scale),y: Float(p.y*scale))) else { return }
+        onLongPress?(CLLocationCoordinate2D(latitude: point.latitude,longitude: point.longitude))
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === placePress || otherGestureRecognizer === placePress
+    }
+    func onMapLoaded(with statistics: YMKMapLoadStatistics) {
+        loaded = true
+        if let pendingMove { self.pendingMove = (pendingMove.0,pendingMove.1,false) }
+        applyPendingMove(); accessibilityLabel = "Карта открытий · Яндекс · загружена"
+    }
     func onCameraPositionChanged(with map: YMKMap?, cameraPosition: YMKCameraPosition, cameraUpdateReason: YMKCameraUpdateReason, finished: Bool) {
         ink.setNeedsDisplay()
         accessibilityValue = String(format: "%.5f, %.5f",cameraPosition.target.latitude,cameraPosition.target.longitude)
-        if cameraUpdateReason == .gestures { onGesture?() }
+        if cameraUpdateReason == .gestures { pendingMove = nil; onGesture?() }
     }
 }
 

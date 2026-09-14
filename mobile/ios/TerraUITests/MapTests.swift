@@ -4,7 +4,7 @@ final class MapTests: XCTestCase {
         let app = XCUIApplication()
         continueAfterFailure = false
         addUIInterruptionMonitor(withDescription: "Location") { alert in
-            for title in ["Allow While Using App", "Разрешить при использовании"] { if alert.buttons[title].exists { alert.buttons[title].tap(); return true } }
+            for title in ["Allow While Using App", "Разрешить при использовании", "Allow", "Разрешить"] { if alert.buttons[title].exists { alert.buttons[title].tap(); return true } }
             return false
         }
         app.launch()
@@ -47,6 +47,7 @@ final class MapTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["metric-km"].exists)
         XCTAssertTrue(app.staticTexts["metric-energy"].exists)
         XCTAssertFalse(app.segmentedControls["travelModes"].isHittable)
+        app.tap() // Handle the first motion-permission prompt before the screenshot.
         capture(app,"01-active-dashboard")
         app.buttons["startRecording"].tap()
         XCTAssertEqual(app.buttons["startRecording"].label, "Продолжить")
