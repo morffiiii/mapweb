@@ -1,9 +1,12 @@
 import UIKit
+import YandexMapsMobile
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        YMKMapKit.setApiKey(MapSecrets.yandex)
+        YMKMapKit.sharedInstance()
         let window = UIWindow(frame: UIScreen.main.bounds)
         let ready = UserDefaults.standard.bool(forKey: "onboardingComplete") && LocalAccount.record() != nil && UserDefaults.standard.bool(forKey: "localSession")
         window.rootViewController = ready ? MapController() : WelcomeController()

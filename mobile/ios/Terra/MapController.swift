@@ -44,6 +44,7 @@ final class FogRenderer: MKOverlayRenderer {
 
 final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewControllerDelegate, UIGestureRecognizerDelegate {
     private let map = MKMapView()
+    private var yandex: YandexSurface?
     private let engine = TrackingEngine.shared
     private let dashboard = MetricPanel()
     private let activity = UILabel()
@@ -70,6 +71,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         map.accessibilityIdentifier = "nativeMap"
         map.isAccessibilityElement = true; map.accessibilityLabel = "Карта открытий"; map.accessibilityTraits = .allowsDirectInteraction
         placeGesture.delegate = self; placeGesture.minimumPressDuration = 0.6; placeGesture.cancelsTouchesInView = false; map.addGestureRecognizer(placeGesture)
+        configureProvider()
         refreshPlaces()
         let top = UIStackView(); top.axis = .horizontal; top.distribution = .equalSpacing
         let title = UILabel(); title.text = "TERRA ↗"; title.font = .systemFont(ofSize: 27, weight: .black)
@@ -116,6 +118,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        yandex?.frame = CGRect(x: 0,y: 0,width: view.bounds.width,height: bottomPanel.map { $0.frame.minY-8 } ?? view.bounds.height)
         map.layoutMargins = UIEdgeInsets(top: 110, left: 16, bottom: bottomPanel.map { view.bounds.height-$0.frame.minY+8 } ?? 320, right: 16)
     }
     private func applyTheme() {
@@ -128,10 +131,12 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         refreshMetrics()
         if engine.recording && !wasRecording { following = true }
         wasRecording = engine.recording
-        if !centered, let p = engine.position { centered = true; map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true) }
-        if following, engine.recording, let p = engine.position { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }
+        if !centered, let p = engine.position { centered = true; moveMap(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true) }
+        if following, engine.recording, let p = engine.position { moveMap(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }
         let sessions = (engine.state.sessions + [engine.state.active].compactMap { $0 }).filter { layer == nil || $0.mode.category == layer }
         let key = "\(layer?.rawValue ?? "all"):\(sessions.map { "\($0.id):\($0.points.count)" }.joined(separator: ",")):\(traitCollection.userInterfaceStyle.rawValue)"
+        yandex?.sessions = sessions; yandex?.fogVisible = showFog; yandex?.position = engine.position?.coordinate
+        yandex?.dark = traitCollection.userInterfaceStyle == .dark
         if signature != key {
             signature = key
             if let fog { map.removeOverlay(fog) }
@@ -162,7 +167,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         else { engine.begin(selectedMode) }
     }
     @objc private func endRecording() { let session = engine.state.active; engine.finish(); if engine.state.active == nil, let session { replay(session) } }
-    @objc private func locate() { following = true; engine.locate(); if let p = engine.position { map.setRegion(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }; if !engine.authorized { settingsPermission() } }
+    @objc private func locate() { following = true; engine.locate(); if let p = engine.position { moveMap(MKCoordinateRegion(center: p.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000), animated: true) }; if !engine.authorized { settingsPermission() } }
 
     @discardableResult private func page(_ title: String) -> TerraPage {
         let p = TerraPage(title); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self)
@@ -188,15 +193,38 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         p.text("Маршрут начинает записываться сразу. Если GPS ещё уточняется, первые точные координаты добавятся автоматически. Не закрывай Terra смахиванием во время записи.")
         p.action("Шаги",detail: "Разрешение движения и фитнеса",icon: "shoeprints.fill") { [weak self] in self?.page("Шаги").text("Шаги считаются датчиком во время пешего маршрута. На паузе счётчик останавливается. Если показано «—», проверь разрешение «Движение и фитнес» в настройках телефона. На устройстве без датчика шаги недоступны.") }
         p.action("Геопозиция", icon: "location.fill") { [weak self] in self?.settingsPermission() }
-        p.text("Карта: Apple Maps. Подключение Яндекс Карт требует ключа MapKit.\nTerra · 2.1\nМаршруты и личные места хранятся на этом телефоне.")
+        p.text("Карты: Яндекс и Apple Maps.\nTerra · 2.3.1\nМаршруты и личные места хранятся на этом телефоне.")
+    }
+    private func configureProvider() {
+        if YandexSurface.selected {
+            if yandex == nil {
+                let surface = YandexSurface(frame: view.bounds)
+                surface.onLongPress = { [weak self] point in self?.editPlace(Place(lat: point.latitude,lng: point.longitude,note: ""),isNew: true) }
+                surface.onPlace = { [weak self] place in self?.placeDetails(place) }
+                surface.onGesture = { [weak self] in self?.following = false }
+                yandex = surface; view.insertSubview(surface,aboveSubview: map)
+            }
+            map.isHidden = true
+        } else { yandex?.removeFromSuperview(); yandex = nil; map.isHidden = false }
+        centered = false; signature = ""; view.setNeedsLayout()
+        refreshPlaces()
+    }
+    private func moveMap(_ region: MKCoordinateRegion, animated: Bool) {
+        if let yandex { yandex.move(region.center,meters: region.span.latitudeDelta*111195,animated: animated) }
+        else { map.setRegion(region,animated: animated) }
     }
     private func mapSettings() {
         let p = page("Карта")
-        p.text("Apple Maps · подключена")
-        for (i,title) in ["Схема","Спутник","Гибрид"].enumerated() { p.action(title,detail: UserDefaults.standard.integer(forKey: "mapStyle") == i ? "Выбрано" : "",icon: i == 0 ? "map" : "globe") { [weak self,weak p] in UserDefaults.standard.set(i,forKey: "mapStyle"); self?.map.mapType = [.standard,.satellite,.hybrid][i]; p?.close() } }
-        p.text("Другие провайдеры")
-        p.action("Яндекс Карты",detail: "Нужны ключ MapKit и подключение SDK",icon: "key") { [weak self] in self?.page("Яндекс Карты").text("Открой developer.tech.yandex.ru → Подключить API → MapKit — мобильный SDK. Создай ключ для проекта Terra. После добавления ключа подключим SDK; сейчас карта остаётся Apple Maps.") }
-        p.action("Google Maps",detail: "Нужны ключ Google Maps и подключение SDK",icon: "key") { [weak self] in self?.page("Google Maps").text("Нужен проект Google Cloud с Maps SDK for iOS, API-ключом и настройкой биллинга. После получения ключа подключим SDK; сейчас карта остаётся Apple Maps.") }
+        for (name,provider) in [("Яндекс Карты","yandex"),("Apple Maps","apple")] {
+            p.action(name,detail: (YandexSurface.selected == (provider == "yandex")) ? "Выбрана" : "Переключить",icon: "map") { [weak self,weak p] in
+                UserDefaults.standard.set(provider,forKey: "mapProvider"); self?.configureProvider(); self?.refresh(); p?.close()
+            }
+        }
+        if YandexSurface.selected { p.text("Схема Яндекса · светлая и тёмная темы. Спутник доступен при выборе Apple Maps.") }
+        else {
+            for (i,title) in ["Схема","Спутник","Гибрид"].enumerated() { p.action(title,detail: UserDefaults.standard.integer(forKey: "mapStyle") == i ? "Выбрано" : "",icon: i == 0 ? "map" : "globe") { [weak self,weak p] in UserDefaults.standard.set(i,forKey: "mapStyle"); self?.map.mapType = [.standard,.satellite,.hybrid][i]; p?.close() } }
+        }
+        p.action("Google Maps",detail: "Пока не подключена",icon: "key") { [weak self] in self?.page("Google Maps").text("Для подключения нужен отдельный ключ Maps SDK for iOS и проект Google Cloud с биллингом.") }
     }
     @objc private func layers() {
         let p = page("Слои")
@@ -205,7 +233,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
             let row = UIStackView(); row.alignment = .center; let label = UILabel(); label.text = title; label.textColor = .label; row.addArrangedSubview(label)
             let toggle = UISwitch(); toggle.isOn = value; toggle.accessibilityLabel = title; toggle.addAction(UIAction { [weak self,weak toggle] _ in UserDefaults.standard.set(toggle?.isOn ?? true,forKey: key); self?.signature = ""; self?.refresh(); self?.refreshPlaces() },for: .valueChanged); row.addArrangedSubview(toggle); p.content.addArrangedSubview(row)
         }
-        p.action("Убрать найденные точки",icon: "sparkles") { [weak self] in guard let self else { return }; self.map.removeAnnotations(self.nearbyPins); self.nearbyPins.removeAll() }
+        p.action("Убрать найденные точки",icon: "sparkles") { [weak self] in guard let self else { return }; self.map.removeAnnotations(self.nearbyPins); self.nearbyPins.removeAll(); self.yandex?.nearby = [] }
         p.action("Неизведанное рядом",icon: "sparkle.magnifyingglass") { [weak self] in self?.nearby() }
         p.action("Все способы", detail: layer == nil ? "Выбран общий слой" : "Показать всё", icon: "square.3.layers.3d") { [weak self, weak p] in self?.layer = nil; self?.refresh(); p?.close() }
         for mode in TravelMode.allCases { p.action(mode.title, detail: layer == mode ? "Выбран" : "", icon: mode.symbol, color: mode.color) { [weak self, weak p] in self?.layer = mode; self?.refresh(); p?.close() } }
@@ -348,8 +376,8 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
                 if found.isEmpty { p.text("Рядом всё исследовано. Попробуй поиск из другого места.") }
                 for point in found { let meters = CLLocation(latitude: point.lat, longitude: point.lng).distance(from: pos)
                     p.action("Неоткрытый участок", detail: "\(Int(meters)) м от тебя", icon: "arrow.up.right") { [weak self, weak p] in
-                        self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: point.coordinate, latitudinalMeters: 700, longitudinalMeters: 700), animated: true)
-                        let pin = MKPointAnnotation(); pin.coordinate = point.coordinate; pin.title = "Неоткрытый участок"; self?.map.addAnnotation(pin); self?.nearbyPins.append(pin); self?.closePages()
+                        self?.following = false; self?.moveMap(MKCoordinateRegion(center: point.coordinate, latitudinalMeters: 700, longitudinalMeters: 700), animated: true)
+                        let pin = MKPointAnnotation(); pin.coordinate = point.coordinate; pin.title = "Неоткрытый участок"; self?.map.addAnnotation(pin); self?.nearbyPins.append(pin); self?.yandex?.nearby.append(point.coordinate); self?.closePages()
                     }
                 }
             }
@@ -359,6 +387,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         let p = RoutePage(session); addChild(p); p.view.frame = view.bounds; p.view.autoresizingMask = [.flexibleWidth,.flexibleHeight]; view.addSubview(p.view); p.didMove(toParent: self)
     }
     private func refreshPlaces() {
+        yandex?.places = showPlaces ? PersonalStore.shared.data.places : []
         map.removeAnnotations(map.annotations.filter { $0 is PlacePin })
         if showPlaces { for place in PersonalStore.shared.data.places { map.addAnnotation(PlacePin(place)) } }
     }
@@ -376,7 +405,7 @@ final class MapController: UIViewController, MKMapViewDelegate, PHPickerViewCont
         p.text(place.displayTitle,large: true)
         if place.title?.isEmpty == false || place.note != place.displayTitle { p.text(place.note) }
         for item in place.attachments { p.content.addArrangedSubview(MediaCard(item,presenter: p)) }
-        p.action("Показать на карте",icon: "map") { [weak self] in self?.following = false; self?.map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat,longitude: place.lng),latitudinalMeters: 700,longitudinalMeters: 700),animated: true); self?.closePages() }
+        p.action("Показать на карте",icon: "map") { [weak self] in self?.following = false; self?.moveMap(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: place.lat,longitude: place.lng),latitudinalMeters: 700,longitudinalMeters: 700),animated: true); self?.closePages() }
         p.action("Редактировать",icon: "pencil") { [weak self] in self?.editPlace(place) }
         p.action("Удалить место",icon: "trash",color: .systemRed) { [weak self] in
             guard let self else { return }; let confirm = self.page("Удалить место?"); confirm.text("Заметка исчезнет из твоих мест и с карты.")

@@ -5,6 +5,7 @@ import MapKit
 final class RoutePage: TerraPage, MKMapViewDelegate {
     private let session: TrackSession
     private let routeMap = MKMapView()
+    private var yandex: YandexSurface?
     private var timer: Timer?
     init(_ session: TrackSession) { self.session = session; super.init("Твой маршрут") }
     required init?(coder: NSCoder) { fatalError() }
@@ -17,6 +18,12 @@ final class RoutePage: TerraPage, MKMapViewDelegate {
         text("Шаги: \(session.steps.map(String.init) ?? "—")")
         routeMap.delegate = self; routeMap.layer.cornerRadius = 24; routeMap.clipsToBounds = true
         routeMap.accessibilityIdentifier = "historyRouteMap"; routeMap.heightAnchor.constraint(equalToConstant: 420).isActive = true; content.addArrangedSubview(routeMap)
+        if YandexSurface.selected {
+            routeMap.isHidden = true
+            let surface = YandexSurface(frame: .zero); surface.fogVisible = false; surface.route = session; surface.dark = traitCollection.userInterfaceStyle == .dark
+            surface.accessibilityIdentifier = "historyRouteMap"; surface.heightAnchor.constraint(equalToConstant: 420).isActive = true
+            surface.clipsToBounds = true; surface.layer.cornerRadius = 24; content.addArrangedSubview(surface); yandex = surface
+        }
         if session.points.isEmpty { text("В этой записи нет точных координат GPS."); return }
         draw(session.points.count)
         action("Воспроизвести", icon: "play.fill") { [weak self] in
@@ -28,6 +35,14 @@ final class RoutePage: TerraPage, MKMapViewDelegate {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if let yandex, yandex.tag == 0, yandex.bounds.width > 0, let first = session.points.first {
+            yandex.tag = 1
+            let latitudes = session.points.map(\.lat), longitudes = session.points.map(\.lng)
+            let center = CLLocationCoordinate2D(latitude: ((latitudes.min() ?? first.lat)+(latitudes.max() ?? first.lat))/2,longitude: ((longitudes.min() ?? first.lng)+(longitudes.max() ?? first.lng))/2)
+            let width = ((longitudes.max() ?? first.lng)-(longitudes.min() ?? first.lng))*111195*cos(center.latitude * .pi/180)
+            let height = ((latitudes.max() ?? first.lat)-(latitudes.min() ?? first.lat))*111195
+            yandex.move(center,meters: max(500,max(width,height)*1.4),animated: false)
+        }
         if routeMap.tag == 0, routeMap.bounds.width > 0, let first = session.points.first {
             routeMap.tag = 1
             var bounds = MKMapRect.null
@@ -37,6 +52,7 @@ final class RoutePage: TerraPage, MKMapViewDelegate {
         }
     }
     private func draw(_ count: Int) {
+        if let yandex { yandex.routeCount = count; return }
         routeMap.removeOverlays(routeMap.overlays); routeMap.removeAnnotations(routeMap.annotations)
         var segment: [CLLocationCoordinate2D] = []
         func flush() { if segment.count > 1 { routeMap.addOverlay(MKPolyline(coordinates: segment,count: segment.count)) }; segment.removeAll() }

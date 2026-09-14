@@ -21,6 +21,13 @@ import okhttp3.OkHttpClient
 class MainActivity: Activity(), LocationListener {
     private lateinit var mapView: MapView
     private var map: MapLibreMap? = null
+    private var yandex: YandexSurface? = null
+    private val yandexRoutes=mutableMapOf<ScrollView,YandexSurface>()
+    private val nearbyYandex=mutableListOf<LatLng>()
+    private var bottomPanel: View? = null
+    private val useYandex get()=BuildConfig.YANDEX_MAPKIT_API_KEY.isNotBlank() && getPreferences(0).getString("mapProvider","yandex") == "yandex"
+    companion object { private var yandexInitialized=false }
+
     private lateinit var fog: FogView
     private lateinit var store: Store
     private lateinit var location: LocationManager
@@ -60,6 +67,10 @@ class MainActivity: Activity(), LocationListener {
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     override fun onCreate(state: Bundle?) {
         super.onCreate(state); MapLibre.getInstance(this)
+        if(!yandexInitialized && BuildConfig.YANDEX_MAPKIT_API_KEY.isNotBlank()) {
+            com.yandex.mapkit.MapKitFactory.setApiKey(BuildConfig.YANDEX_MAPKIT_API_KEY)
+            com.yandex.mapkit.MapKitFactory.initialize(applicationContext); yandexInitialized=true
+        }
         HttpRequestUtil.setOkHttpClient(OkHttpClient.Builder().addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent","Terra/2.0 (https://github.com/morffiiii/mapweb)").build()) }.build())
         store=Store.get(this); location=getSystemService(LocationManager::class.java)
         dark=when(getPreferences(0).getInt("theme",0)) { 1 -> false; 2 -> true; else -> resources.configuration.uiMode and 0x30 == 0x20 }
@@ -67,6 +78,16 @@ class MainActivity: Activity(), LocationListener {
         window.navigationBarColor=window.statusBarColor
         root=FrameLayout(this); root.setBackgroundColor(window.statusBarColor); root.fitsSystemWindows=true; setContentView(root)
         mapView=MapView(this); mapView.onCreate(state); root.addView(mapView,FrameLayout.LayoutParams(-1,-1))
+        if(useYandex) {
+            val surface=YandexSurface(this); surface.night(dark); yandex=surface
+            root.addView(surface,FrameLayout.LayoutParams(-1,-1)); mapView.visibility=View.GONE
+            surface.onLongPress={ markPlace(it) }; surface.onTap={ selectPlace(it) }
+            surface.onCamera={ if(::fog.isInitialized) fog.invalidate() }; surface.onGesture={ following=false }
+            root.addOnLayoutChangeListener { _,_,_,_,_,_,_,_,_ ->
+                val available=(root.height-(bottomPanel?.height ?: 0)-dp(20)).coerceAtLeast(dp(100))
+                if(surface.layoutParams.height!=available) surface.layoutParams=FrameLayout.LayoutParams(-1,available)
+            }
+        }
         fog=FogView(this); root.addView(fog,FrameLayout.LayoutParams(-1,-1))
         val top=LinearLayout(this); top.gravity=Gravity.CENTER_VERTICAL
         val title=text("TERRA ↗",26); title.typeface=Typeface.DEFAULT_BOLD; top.addView(navIcon("Слои", "layers") { layers() }); top.addView(navIcon("Настройки", "settings") { settings() }); title.gravity=Gravity.END; top.addView(title,LinearLayout.LayoutParams(0,-2,1f)); panel(root,top,true)
@@ -82,8 +103,8 @@ class MainActivity: Activity(), LocationListener {
         finish=button("Завершить") { val s=store.active; command("stop"); if(s!=null) handler.postDelayed({ if(store.active==null) replay(s) },250) }; actions.addView(start,LinearLayout.LayoutParams(0,dp(54),1f)); actions.addView(finish,LinearLayout.LayoutParams(0,dp(54),1f)); bottom.addView(actions)
         val nav=LinearLayout(this)
         nav.addView(navIcon("История", "history") { history() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(navIcon("Где я", "location") { following=true; locate() },LinearLayout.LayoutParams(0,dp(54),1f)); nav.addView(navIcon("Профиль", "profile") { profile() },LinearLayout.LayoutParams(0,dp(54),1f)); bottom.addView(nav)
-        val attribution=text("© OpenStreetMap contributors · MapLibre",10)
-        attribution.setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) }; bottom.addView(attribution); panel(root,bottom,false)
+        val attribution=text(if(useYandex) "Яндекс Карты" else "© OpenStreetMap contributors · MapLibre",10)
+        attribution.setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(if(useYandex) "https://yandex.ru/maps/" else "https://www.openstreetmap.org/copyright"))) }; bottom.addView(attribution); panel(root,bottom,false)
         mapView.getMapAsync { m -> map=m; m.uiSettings.isCompassEnabled=true; m.addOnCameraMoveListener { fog.invalidate() }; m.addOnCameraMoveStartedListener { reason -> if(reason==1) following=false }; m.addOnMapLongClickListener { coordinate -> markPlace(coordinate); true }; m.addOnMapClickListener { coordinate -> selectPlace(coordinate) }; loadStyle(); refresh() }
         store.listeners.add(refreshListener); refresh()
         gate=!getPreferences(0).getBoolean("onboardingComplete",false) || (!LocalAccount(this).exists() || !getPreferences(0).getBoolean("localSession",false))
@@ -100,6 +121,7 @@ class MainActivity: Activity(), LocationListener {
     private fun text(value: String,size: Int)=TextView(this).also { it.text=value; it.textSize=size.toFloat(); it.setTextColor(if(dark) Color.WHITE else Color.rgb(30,31,36)); it.setPadding(0,dp(4),0,dp(4)) }
     private fun button(value: String,action: () -> Unit)=Button(this).also { it.text=value; it.textSize=12f; it.isAllCaps=false; it.setTextColor(accent); it.setBackgroundColor(Color.TRANSPARENT); it.setOnClickListener { action() } }
     private fun panel(root: FrameLayout,content: LinearLayout,top: Boolean) {
+        if(!top) bottomPanel=content
         content.setPadding(dp(16),dp(10),dp(16),dp(10)); content.background=shape(if(dark) Color.argb(245,24,26,31) else Color.argb(245,250,249,247)); content.elevation=dp(8).toFloat()
         val p=FrameLayout.LayoutParams(-1,-2,if(top) Gravity.TOP else Gravity.BOTTOM); p.setMargins(dp(12),dp(10),dp(12),dp(10)); root.addView(content,p)
     }
@@ -112,7 +134,7 @@ class MainActivity: Activity(), LocationListener {
             if(!location.isProviderEnabled(LocationManager.GPS_PROVIDER)) { store.message="Включи геолокацию в настройках телефона"; refresh() }
         } catch(e: Exception) { store.message="Не удалось включить GPS"; refresh() }
     }
-    private fun locate() { if(!permitted()) { watch(); return }; store.position?.let { map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat,it.lng),15.5)) } ?: run { store.message="Ждём сигнал GPS…"; watch(); refresh() } }
+    private fun locate() { if(!permitted()) { watch(); return }; store.position?.let { moveMap(LatLng(it.lat,it.lng),15.5) } ?: run { store.message="Ждём сигнал GPS…"; watch(); refresh() } }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code,permissions,results)
         if(code==22) { toggle(); return }
@@ -141,12 +163,12 @@ class MainActivity: Activity(), LocationListener {
         val recording=s!=null && s.pausedAt==null
         if(recording && !wasRecording) following=true
         wasRecording=recording
-        if(recording && following) store.position?.let { p -> if(lastCameraPoint==null || lastCameraPoint!!.distance(p)>5) { lastCameraPoint=p; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(p.lat,p.lng),15.5),700) } }
+        if(recording && following) store.position?.let { p -> if(lastCameraPoint==null || lastCameraPoint!!.distance(p)>5) { lastCameraPoint=p; moveMap(LatLng(p.lat,p.lng),15.5) } }
         metric.text=if(s==null) "Твой мир. Твой путь." else "%.2f км  %02d:%02d".format(s.distance()/1000,s.duration()/60,s.duration()%60)
         start.text=if(store.pending!=null) "Отменить ожидание" else if(s==null) "Начать прогулку ↗" else if(s.pausedAt==null) "Пауза" else "Продолжить"
         start.isEnabled=!store.blocked; finish.visibility=if(s==null) View.GONE else View.VISIBLE; modes.isEnabled=s==null && store.pending==null
         if(s!=null) modes.setSelection(Mode.visible.indexOf(s.mode.category))
-        if(!centered && store.position!=null && map!=null) { centered=true; locate() }; fog.invalidate()
+        if(!centered && store.position!=null && (map!=null || yandex!=null)) { centered=true; locate() }; fog.invalidate()
     }
     private fun metricPanel(): LinearLayout {
         val panel=LinearLayout(this); panel.orientation=LinearLayout.VERTICAL
@@ -194,7 +216,7 @@ class MainActivity: Activity(), LocationListener {
         root.addView(scroll,FrameLayout.LayoutParams(-1,-1)); pages.add(scroll); scroll.alpha=0f; scroll.animate().alpha(1f).setDuration(180).start(); return column
     }
     private fun closePage(column: LinearLayout) { val scroll=column.parent as? ScrollView ?: return; disposePage(scroll); root.removeView(scroll); pages.remove(scroll) }
-    private fun disposePage(scroll: ScrollView) { videos.remove(scroll)?.stopPlayback(); routeTasks.remove(scroll)?.let { handler.removeCallbacks(it) }; routeMaps.remove(scroll)?.let { it.onPause(); it.onStop(); it.onDestroy() } }
+    private fun disposePage(scroll: ScrollView) { yandexRoutes.remove(scroll)?.stop(); videos.remove(scroll)?.stopPlayback(); routeTasks.remove(scroll)?.let { handler.removeCallbacks(it) }; routeMaps.remove(scroll)?.let { it.onPause(); it.onStop(); it.onDestroy() } }
     private fun closePages() { pages.forEach { disposePage(it); root.removeView(it) }; pages.clear() }
     @Deprecated("Back navigation compatibility") override fun onBackPressed() { if(gate) { finish(); return }; if(pages.isNotEmpty()) { val last=pages.removeAt(pages.lastIndex); disposePage(last); root.removeView(last) } else super.onBackPressed() }
     private fun row(page: LinearLayout,title: String, detail: String="", color: Int=accent, action: () -> Unit) {
@@ -255,7 +277,7 @@ class MainActivity: Activity(), LocationListener {
         listOf("Неоткрытые участки" to "showFog","Мои места" to "showPlaces").forEach { (title,key) ->
             val toggle=Switch(this); toggle.text=title; toggle.textSize=17f; toggle.setTextColor(if(dark) Color.WHITE else Color.BLACK); toggle.setPadding(0,dp(14),0,dp(14)); toggle.isChecked=getPreferences(0).getBoolean(key,true); toggle.setOnCheckedChangeListener { _,checked -> getPreferences(0).edit().putBoolean(key,checked).apply(); fog.invalidate() }; p.addView(toggle)
         }
-        row(p,"Убрать найденные точки") { nearbyMarkers.forEach { map?.removeMarker(it) }; nearbyMarkers.clear() }
+        row(p,"Убрать найденные точки") { nearbyMarkers.forEach { map?.removeMarker(it) }; nearbyMarkers.clear(); nearbyYandex.clear(); fog.invalidate() }
         row(p,"Неизведанное рядом","Найти ещё не открытые участки") { nearby() }
         row(p,"Все способы",if(layer==null) "Выбрано" else "") { layer=null; fog.invalidate(); closePage(p) }
         Mode.visible.forEach { m -> row(p,m.title,if(layer==m) "Выбран" else "",m.color) { layer=m; fog.invalidate(); closePage(p) } }
@@ -266,17 +288,22 @@ class MainActivity: Activity(), LocationListener {
         store.sessions.filter { mode==null || it.mode.category==mode }.reversed().forEach { s -> row(p,"${s.mode.title} · %.2f км".format(s.distance()/1000),"${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(s.startedAt))}\n${s.duration()/60} мин · Открыть карту",s.mode.color) { replay(s) } }
     }
     private fun mapSettings() {
-        val p=page("Карта"); row(p,"OpenStreetMap","Схема · текущая карта") {}
-        row(p,"Яндекс Карты","Нужны ключ MapKit и подключение SDK") { alert("Открой developer.tech.yandex.ru → Подключить API → MapKit — мобильный SDK. Создай ключ для Terra. После добавления ключа подключим SDK; сейчас используется OpenStreetMap.") }
-        row(p,"Google Maps","Схема и спутник после подключения SDK") { alert("Нужен проект Google Cloud с Maps SDK for Android, API-ключом и настройкой биллинга. Ключ ограничивается пакетом app.terra.explore и сертификатом приложения.") }
-        p.addView(text("Apple Maps в этой нативной Android-версии недоступна. Для спутника сначала нужно подключить провайдера, который его предоставляет.",15))
+        val p=page("Карта")
+        for((name,provider) in listOf("Яндекс Карты" to "yandex","OpenStreetMap" to "osm")) {
+            row(p,name,if(useYandex == (provider=="yandex")) "Выбрана" else "Переключить") {
+                if(provider=="yandex" && BuildConfig.YANDEX_MAPKIT_API_KEY.isBlank()) alert("В этой сборке не настроен ключ карты")
+                else { getPreferences(0).edit().putString("mapProvider",provider).apply(); recreate() }
+            }
+        }
+        p.addView(text("Яндекс: схема со светлой и тёмной темой. Спутниковые снимки в мобильном SDK Яндекса недоступны для сторонних приложений.",15))
+        row(p,"Google Maps","Пока не подключена") { alert("Нужен отдельный ключ Maps SDK for Android и проект Google Cloud с биллингом.") }
     }
     private fun settings() {
         val p=page("Настройки"); row(p,"Карта","Провайдер и вид карты") { mapSettings() }; p.addView(text("Внешний вид",18))
         listOf("Как на телефоне","Светлая","Тёмная").forEachIndexed { i,name -> row(p,name,if(getPreferences(0).getInt("theme",0)==i) "Выбрана" else "") { getPreferences(0).edit().putInt("theme",i).apply(); recreate() } }
         row(p,"Шаги","Датчик и разрешение физической активности") { alert("Шаги считаются датчиком во время пешего маршрута. Если показано «—», проверь разрешение физической активности в настройках Terra. На устройстве без датчика шаги недоступны.") }
         row(p,"Геопозиция","Разрешения и работа в фоне") { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName"))) }
-        p.addView(text("Запись включается сразу. Пока GPS уточняется, неточные координаты не сохраняются. Не останавливай Terra принудительно во время прогулки.\n\nКарта: OpenStreetMap. Яндекс Карты требуют ключа MapKit.\nTerra · 2.1\nМаршруты и места хранятся на этом телефоне.",15))
+        p.addView(text("Запись включается сразу. Пока GPS уточняется, неточные координаты не сохраняются. Не останавливай Terra принудительно во время прогулки.\n\nКарты: Яндекс и OpenStreetMap.\nTerra · 2.3.1\nМаршруты и места хранятся на этом телефоне.",15))
     }
     private fun personal(): org.json.JSONObject = org.json.JSONObject(getPreferences(0).getString("personal","{}") ?: "{}")
     private fun savePersonal(p: org.json.JSONObject) { check(getPreferences(0).edit().putString("personal",p.toString()).commit()) { "Не удалось сохранить" } }
@@ -372,7 +399,7 @@ class MainActivity: Activity(), LocationListener {
                 if("$row:$col" !in cells && found.size<6) found.add(Point(lat,lng,0,0.0))
             }
             runOnUiThread { if(found.isEmpty()) p.addView(text("Рядом всё исследовано. Попробуй из другого места.",18))
-                found.forEach { target -> row(p,"Неоткрытый участок","${pos.distance(target).toInt()} м от тебя") { following=false; map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(target.lat,target.lng),16.0)); map?.addMarker(org.maplibre.android.annotations.MarkerOptions().position(LatLng(target.lat,target.lng)).title("Неоткрытый участок").icon(org.maplibre.android.annotations.IconFactory.getInstance(this).fromBitmap(annotationBitmap(true))))?.let { nearbyMarkers.add(it) }; closePages() } }
+                found.forEach { target -> row(p,"Неоткрытый участок","${pos.distance(target).toInt()} м от тебя") { following=false; moveMap(LatLng(target.lat,target.lng),16.0); if(useYandex) nearbyYandex.add(LatLng(target.lat,target.lng)); map?.addMarker(org.maplibre.android.annotations.MarkerOptions().position(LatLng(target.lat,target.lng)).title("Неоткрытый участок").icon(org.maplibre.android.annotations.IconFactory.getInstance(this).fromBitmap(annotationBitmap(true))))?.let { nearbyMarkers.add(it) }; closePages() } }
             }
         }.start()
     }
@@ -382,6 +409,18 @@ class MainActivity: Activity(), LocationListener {
         p.addView(text("%.2f км · %d мин".format(s.distance()/1000,s.duration()/60),28))
         p.addView(text("≈ %.0f активных ккал".format(ActivityMetrics.calories(s,personal().optDouble("weight"))),16))
         p.addView(text("Шаги: "+(s.steps?.toString() ?: "—"),16))
+        if(useYandex) {
+            val preview=YandexSurface(this); preview.night(dark); preview.route=s; yandexRoutes[scroll]=preview
+            p.addView(preview,LinearLayout.LayoutParams(-1,dp(420))); preview.start()
+            preview.native.setOnTouchListener { v,event -> v.parent.requestDisallowInterceptTouchEvent(event.action!=MotionEvent.ACTION_UP && event.action!=MotionEvent.ACTION_CANCEL); false }
+            preview.post { if(yandexRoutes[scroll]===preview) preview.fit(s) }
+            if(s.points.isEmpty()) p.addView(text("В этой записи нет точных координат GPS.",16)) else row(p,"Воспроизвести") {
+                routeTasks.remove(scroll)?.let { handler.removeCallbacks(it) }; var frame=0
+                val task=object: Runnable { override fun run() { if(yandexRoutes[scroll]!==preview) return; frame++; preview.routeCount=max(1,s.points.size*frame/75); if(frame<75) handler.postDelayed(this,80) else routeTasks.remove(scroll) } }
+                routeTasks[scroll]=task; handler.post(task)
+            }
+            return
+        }
         val preview=MapView(this); preview.onCreate(null); p.addView(preview,LinearLayout.LayoutParams(-1,dp(420))); routeMaps[scroll]=preview; preview.onStart(); preview.onResume()
         preview.setOnTouchListener { v,event -> v.parent.requestDisallowInterceptTouchEvent(event.action!=MotionEvent.ACTION_UP && event.action!=MotionEvent.ACTION_CANCEL); false }
         preview.getMapAsync { route ->
@@ -413,11 +452,14 @@ class MainActivity: Activity(), LocationListener {
         for(i in 0 until list.length()) if(!list.getJSONObject(i).has("id")) { list.getJSONObject(i).put("id",java.util.UUID.randomUUID().toString()); changed=true }
         if(changed) { data.put("places",list); savePersonal(data) }; return list
     }
+    private fun moveMap(point: LatLng,zoom: Double) { yandex?.move(point,zoom) ?: map?.animateCamera(CameraUpdateFactory.newLatLngZoom(point,zoom)) }
+    private fun screenPoint(point: LatLng): PointF = yandex?.screen(point) ?: map?.projection?.toScreenLocation(point) ?: PointF(-100000f,-100000f)
+    private fun metersPerPixel(lat: Double,lng: Double): Double = yandex?.metersPerPixel(lat,lng) ?: map?.projection?.getMetersPerPixelAtLatitude(lat) ?: 1.0
     private fun selectPlace(coordinate: LatLng): Boolean {
         if(!showPlaces) return false
-        val m=map ?: return false; val tap=m.projection.toScreenLocation(coordinate)
-        try { val places=savedPlaces(); val found=(0 until places.length()).map { places.getJSONObject(it) }.minByOrNull { val pos=m.projection.toScreenLocation(LatLng(it.getDouble("lat"),it.getDouble("lng"))); hypot((pos.x-tap.x).toDouble(),(pos.y-tap.y).toDouble()) } ?: return false
-            val pos=m.projection.toScreenLocation(LatLng(found.getDouble("lat"),found.getDouble("lng"))); if(hypot((pos.x-tap.x).toDouble(),(pos.y-tap.y).toDouble())>dp(24)) return false
+        val tap=screenPoint(coordinate)
+        try { val places=savedPlaces(); val found=(0 until places.length()).map { places.getJSONObject(it) }.minByOrNull { val pos=screenPoint(LatLng(it.getDouble("lat"),it.getDouble("lng"))); hypot((pos.x-tap.x).toDouble(),(pos.y-tap.y).toDouble()) } ?: return false
+            val pos=screenPoint(LatLng(found.getDouble("lat"),found.getDouble("lng"))); if(hypot((pos.x-tap.x).toDouble(),(pos.y-tap.y).toDouble())>dp(24)) return false
             placeDetails(found); return true
         } catch(e: Exception) { alert("Не удалось открыть место"); return true }
     }
@@ -485,11 +527,11 @@ class MainActivity: Activity(), LocationListener {
     override fun onProviderDisabled(provider: String) { store.message="Нет GPS. Включи геолокацию в настройках."; refresh() }
     @Deprecated("Required on Android 8–10")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-    override fun onStart() { super.onStart(); mapView.onStart(); routeMaps.values.forEach { it.onStart() } }
+    override fun onStart() { super.onStart(); if(yandexInitialized) com.yandex.mapkit.MapKitFactory.getInstance().onStart(); yandex?.start(); yandexRoutes.values.forEach { it.start() }; mapView.onStart(); routeMaps.values.forEach { it.onStart() } }
     override fun onResume() { super.onResume(); mapView.onResume(); routeMaps.values.forEach { it.onResume() }; if(!gate) watch(); handler.post(tick) }
     override fun onPause() { videos.values.forEach { it.pause() }; handler.removeCallbacks(tick); location.removeUpdates(this); routeMaps.values.forEach { it.onPause() }; mapView.onPause(); super.onPause() }
-    override fun onStop() { routeMaps.values.forEach { it.onStop() }; mapView.onStop(); super.onStop() }
-    override fun onDestroy() { videos.values.forEach { it.stopPlayback() }; videos.clear(); handler.removeCallbacksAndMessages(null); store.listeners.remove(refreshListener); routeMaps.values.forEach { it.onDestroy() }; routeMaps.clear(); mapView.onDestroy(); super.onDestroy() }
+    override fun onStop() { yandex?.stop(); yandexRoutes.values.forEach { it.stop() }; if(yandexInitialized) com.yandex.mapkit.MapKitFactory.getInstance().onStop(); routeMaps.values.forEach { it.onStop() }; mapView.onStop(); super.onStop() }
+    override fun onDestroy() { yandexRoutes.clear(); videos.values.forEach { it.stopPlayback() }; videos.clear(); handler.removeCallbacksAndMessages(null); store.listeners.remove(refreshListener); routeMaps.values.forEach { it.onDestroy() }; routeMaps.clear(); mapView.onDestroy(); super.onDestroy() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
     private inner class FogView(context: Context): View(context) {
@@ -498,22 +540,24 @@ class MainActivity: Activity(), LocationListener {
         init { isClickable=false; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO; setLayerType(LAYER_TYPE_SOFTWARE,null) }
         override fun onTouchEvent(event: android.view.MotionEvent)=false
         override fun onDraw(canvas: Canvas) {
-            val m=map ?: return; val save=canvas.saveLayer(0f,0f,width.toFloat(),height.toFloat(),null)
+            if(map==null && yandex==null) return; val save=canvas.saveLayer(0f,0f,width.toFloat(),height.toFloat(),null)
             if(showFog) canvas.drawColor(if(dark) Color.argb(230,23,25,32) else Color.argb(218,182,184,189))
             paint.xfermode=PorterDuffXfermode(PorterDuff.Mode.CLEAR); paint.style=Paint.Style.FILL; paint.strokeCap=Paint.Cap.ROUND
+            yandex?.let { canvas.drawRect(0f,(it.height-dp(50)).toFloat(),dp(150).toFloat(),it.height.toFloat(),paint) }
             val sessions=store.sessions + listOfNotNull(store.active)
             for(s in sessions) { if(layer!=null && s.mode.category!=layer) continue
                 for((i,p) in s.points.withIndex()) {
                     if(p.excludeDiscovery) continue
-                    val xy=m.projection.toScreenLocation(LatLng(p.lat,p.lng)); val radius=(Discovery.radius/m.projection.getMetersPerPixelAtLatitude(p.lat)).toFloat()
+                    val xy=screenPoint(LatLng(p.lat,p.lng)); val radius=(Discovery.radius/metersPerPixel(p.lat,p.lng)).toFloat()
                     canvas.drawCircle(xy.x,xy.y,radius,paint)
-                    if(i>0 && !s.points[i-1].excludeDiscovery && s.points[i-1].connects(p) && abs(p.lng-s.points[i-1].lng)<180) { val a=m.projection.toScreenLocation(LatLng(s.points[i-1].lat,s.points[i-1].lng)); paint.strokeWidth=radius*2; canvas.drawLine(a.x,a.y,xy.x,xy.y,paint) }
+                    if(i>0 && !s.points[i-1].excludeDiscovery && s.points[i-1].connects(p) && abs(p.lng-s.points[i-1].lng)<180) { val a=screenPoint(LatLng(s.points[i-1].lat,s.points[i-1].lng)); paint.strokeWidth=radius*2; canvas.drawLine(a.x,a.y,xy.x,xy.y,paint) }
                 }
             }
             paint.xfermode=null; canvas.restoreToCount(save)
             val places=personal().optJSONArray("places") ?: org.json.JSONArray(); paint.color=accent
-            if(showPlaces) for(i in 0 until places.length()) { val place=places.getJSONObject(i); val xy=m.projection.toScreenLocation(LatLng(place.getDouble("lat"),place.getDouble("lng"))); canvas.drawBitmap(placeIcon,xy.x-dp(16),xy.y-dp(38),paint) }
-            store.position?.let { val p=m.projection.toScreenLocation(LatLng(it.lat,it.lng)); paint.color=Color.WHITE; canvas.drawCircle(p.x,p.y,dp(9).toFloat(),paint); paint.color=accent; canvas.drawCircle(p.x,p.y,dp(6).toFloat(),paint) }
+            if(showPlaces) for(i in 0 until places.length()) { val place=places.getJSONObject(i); val xy=screenPoint(LatLng(place.getDouble("lat"),place.getDouble("lng"))); canvas.drawBitmap(placeIcon,xy.x-dp(16),xy.y-dp(38),paint) }
+            nearbyYandex.forEach { target -> val xy=screenPoint(target); canvas.drawBitmap(annotationBitmap(true),xy.x-dp(16),xy.y-dp(38),paint) }
+            store.position?.let { val p=screenPoint(LatLng(it.lat,it.lng)); paint.color=Color.WHITE; canvas.drawCircle(p.x,p.y,dp(9).toFloat(),paint); paint.color=accent; canvas.drawCircle(p.x,p.y,dp(6).toFloat(),paint) }
         }
     }
 }

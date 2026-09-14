@@ -10,3 +10,6 @@ build/
 **/*.xcodeproj/
 mobile/ios/Terra/Info.plist
 *.apk
+mobile/ios/Pods/
+mobile/ios/*.xcworkspace/
+mobile/ios/Terra/MapSecrets.swift

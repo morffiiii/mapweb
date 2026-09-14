@@ -15,10 +15,14 @@ jobs:
         with:
           xcode-version: latest-stable
       - name: Generate native project
+        env:
+          YANDEX_MAPKIT_API_KEY: ${{ secrets.YANDEX_MAPKIT_API_KEY }}
         run: |
+          python3 scripts/configure-map-key.py
           brew install xcodegen
           cd mobile/ios
           xcodegen generate
+          pod install
       - name: Test native app
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for a in d["devices"].values() for x in a if "iPhone" in x["name"]))')
@@ -28,7 +32,7 @@ jobs:
           (while true; do xcrun simctl location "$DEVICE" set '55.751244,37.618423'; sleep 5; done) &
           GPS_PID=$!
           trap 'kill "$GPS_PID" 2>/dev/null || true' EXIT
-          xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -destination "platform=iOS Simulator,id=$DEVICE" -parallel-testing-enabled NO -derivedDataPath build/simulator -resultBundlePath build/iOS-tests.xcresult CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- test
+          xcodebuild -workspace mobile/ios/Terra.xcworkspace -scheme Terra -destination "platform=iOS Simulator,id=$DEVICE" -parallel-testing-enabled NO -derivedDataPath build/simulator -resultBundlePath build/iOS-tests.xcresult CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- test
       - name: Export UI screenshots
         if: always()
         run: |
@@ -43,7 +47,7 @@ jobs:
           retention-days: 7
       - name: Build native iPhone app
         run: |
-          xcodebuild -project mobile/ios/Terra.xcodeproj -scheme Terra -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          xcodebuild -workspace mobile/ios/Terra.xcworkspace -scheme Terra -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
           mkdir -p build/package/Payload
           cp -R build/device/Build/Products/Release-iphoneos/Terra.app build/package/Payload/Terra.app
           cd build/package
@@ -77,6 +81,8 @@ jobs:
           path: ~/.android/debug.keystore
           key: terra-android-install-key-v1
       - name: Test and build native APK
+        env:
+          YANDEX_MAPKIT_API_KEY: ${{ secrets.YANDEX_MAPKIT_API_KEY }}
         working-directory: mobile/android
         run: gradle testDebugUnitTest assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4

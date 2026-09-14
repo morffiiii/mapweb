@@ -1,0 +1,8 @@
+platform :ios, '16.0'
+use_frameworks!
+target 'Terra' do
+  pod 'YandexMapsMobile', '4.42.0-lite'
+  target 'TerraTests' do
+    inherit! :search_paths
+  end
+end
